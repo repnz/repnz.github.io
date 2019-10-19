@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Tags on Low Level Pleasure</title>
+    <link>/tags/</link>
+    <description>Recent content in Tags on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Wed, 13 Nov 2019 01:23:57 +0200</lastBuildDate>
+    
+	<atom:link href="/tags/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Kernel</title>
+      <link>/tags/kernel/</link>
+      <pubDate>Wed, 13 Nov 2019 01:23:57 +0200</pubDate>
+      
+      <guid>/tags/kernel/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Malware</title>
+      <link>/tags/malware/</link>
+      <pubDate>Wed, 13 Nov 2019 01:23:57 +0200</pubDate>
+      
+      <guid>/tags/malware/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Reversing</title>
+      <link>/tags/reversing/</link>
+      <pubDate>Wed, 13 Nov 2019 01:23:57 +0200</pubDate>
+      
+      <guid>/tags/reversing/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Windows</title>
+      <link>/tags/windows/</link>
+      <pubDate>Wed, 13 Nov 2019 01:23:57 +0200</pubDate>
+      
+      <guid>/tags/windows/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Assembly</title>
+      <link>/tags/assembly/</link>
+      <pubDate>Sat, 26 Oct 2019 18:06:23 +0300</pubDate>
+      
+      <guid>/tags/assembly/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Compiler Optimizations</title>
+      <link>/tags/compiler-optimizations/</link>
+      <pubDate>Sat, 26 Oct 2019 18:06:23 +0300</pubDate>
+      
+      <guid>/tags/compiler-optimizations/</guid>
+      <description></description>
+    </item>
+    
+  </channel>
+</rss>

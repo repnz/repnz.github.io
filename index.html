@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Low Level Pleasure</title>
+  <meta name="description" content="Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  <link href="/index.xml" rel="alternate" type="application/rss+xml" title="Low Level Pleasure" />
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="/">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2019. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    
+<div class="posts">
+<article class="post">
+  <h2 class="post-title">
+    <a href="/posts/abusing-signed-drivers/">Abusing Signed Windows Drivers</a>
+  </h2>
+  
+    <time datetime="2019-11-13T01:23:57&#43;0200" class="post-date">Wed, Nov 13, 2019</time>
+    The Problem We all know the &ldquo;Driver Signature Enforcement&rdquo; feature in windows. This security feature won&rsquo;t allow you to load unsigned drivers into the windows kernel. To bypass this protection, many attackers use vulnerable signed drivers like turla. They try to find vulnerabilities in these drivers and exploit them. What people don&rsquo;t think about is the fact that it&rsquo;s way simpler than finding an exploitable memory corruption bug in a software driver - sometimes the driver just exposes the functionality via DeviceIoControl and this can be used to perform malicious operations in kernel mode.
+    
+      <div class="read-more-link">
+        <a href="/posts/abusing-signed-drivers/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/autochk-rootkit-analysis/">Autochk Rootkit Analysis</a>
+  </h2>
+  
+    <time datetime="2019-11-01T14:00:00&#43;0300" class="post-date">Fri, Nov 1, 2019</time>
+    Introduction Finally had time to write about this rootkit I saw last week. This rootkit is a very simple, it does not employ any uber fancy methods or something, but I do find it nice so I wanted to share. The name of the driver is &ldquo;autochk.sys&rdquo; - that&rsquo;s why we&rsquo;ll call it the autochk rootkit. The sample is already known (28924b6329f5410a5cca30f3530a3fb8a97c23c9509a192f2092cbdf139a91d8), but I haven&rsquo;t found any public analysis. The rootkit was compiled on the 27/8/2017 according to the PE timestamp.
+    
+      <div class="read-more-link">
+        <a href="/posts/autochk-rootkit-analysis/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/reversing-optimizations-division/">Reverse Engineering Optimizations: Division By Multiplication</a>
+  </h2>
+  
+    <time datetime="2019-10-26T18:06:23&#43;0300" class="post-date">Sat, Oct 26, 2019</time>
+    Intro Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain things, you can save lots of time. Knowning the pattern, next time you see this optimization you&rsquo;ll recognize right away how to decompile it.
+In this blog post series I&rsquo;ll document how to decompile certain compiler optimizations, I hope it&rsquo;ll save some time for you.
+Division By Multiplication There&rsquo;s no heavy math in this post lol.
+    
+      <div class="read-more-link">
+        <a href="/posts/reversing-optimizations-division/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/about/">About Me</a>
+  </h2>
+  
+  <p>Hey!</p>
+
+<p>My name is Ori Damari, and I love low level code.</p>
+
+<p>I hope you find this blog interesting and learn new stuff ..</p>
+
+<p>I do low level research for living. My main interests are:</p>
+
+<ul>
+<li>Malware</li>
+<li>Operating Systems</li>
+<li>Windows Internals</li>
+<li>Reverse Engineering</li>
+<li>Kernel Development</li>
+<li>Software Development</li>
+</ul>
+
+<p>repnz is my nickname (I pronounce it rep notzero..) - I like assembly.</p>
+
+<p>You can contact me easily using twitter messages: <a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+<p>And this is Misaki from <a href="https://myanimelist.net/anime/11111/Another">&ldquo;Another&rdquo;</a> - one of the characters I like the most;</p>
+
+<p><img src="/about/misaki.png" alt="How I Look Like In Real Life" /></p>
+
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/crt-find-main/">Finding main() easily</a>
+  </h2>
+  
+    <time datetime="2019-10-12T01:30:09&#43;0300" class="post-date">Sat, Oct 12, 2019</time>
+    <p>The entry point of an executable is normally the runtime initialization code - so how can you easily find main()?</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/crt-find-main/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/random-pdc-driver/">Random PDC Driver</a>
+  </h2>
+  
+    <time datetime="2019-10-08T16:37:09&#43;0300" class="post-date">Tue, Oct 8, 2019</time>
+    Found this funny driver: The pdc.sys windows driver has a DriverUnload routine but it calls KeBugCheckEx causing a bluescreen.
+Just run &quot;sc stop pdc&quot; and see for yourself ;)
+I wonder why they registered DriverUnload if the driver does not support unload.. 🤔 pic.twitter.com/TNpKIZGvZX
+&mdash; Ori Damari (@0xrepnz) October 8, 2019  
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/x64-calling-convention/">Reversing the x64 calling convention</a>
+  </h2>
+  
+    <time datetime="2019-10-06T03:24:09&#43;0300" class="post-date">Sun, Oct 6, 2019</time>
+    <p>In this article I will explain how the x64 calling convention looks like in Windows and we&rsquo;ll dive
+into how it influences reverse engineering.</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/x64-calling-convention/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/windows-critical-threads/">Windows Critical Threads</a>
+  </h2>
+  
+    <time datetime="2019-09-21T17:56:47&#43;0300" class="post-date">Sat, Sep 21, 2019</time>
+    <p>In the windows kernel, each kernel object has a Query/SetInformation functions which can be used to
+manipulate the kernel objects members from user/kernel mode. These functions receive an &ldquo;INFOCLASS&rdquo;
+which is basically the member we want to modify/query.</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/windows-critical-threads/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="/posts/windows-imports-searcher/">Windows Imports Searcher</a>
+  </h2>
+  
+    <time datetime="2019-07-27T19:37:09&#43;0300" class="post-date">Sat, Jul 27, 2019</time>
+    <p>Support Windows OS Reversing by searching easily for references to functions across many DLLs</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/windows-imports-searcher/">Read More…</a>
+      </div>
+    
+  
+</article>
+</div>
+    </main>
+
+    
+  </body>
+</html>

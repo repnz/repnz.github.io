@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  
+  <url>
+    <loc>/posts/abusing-signed-drivers/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/kernel/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/malware/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/reversing/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/windows/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/autochk-rootkit-analysis/</loc>
+    <lastmod>2019-11-01T14:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/assembly/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/tags/compiler-optimizations/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/reversing-optimizations-division/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/about/</loc>
+    <lastmod>2019-10-19T19:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/crt-find-main/</loc>
+    <lastmod>2019-10-12T01:30:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/random-pdc-driver/</loc>
+    <lastmod>2019-10-08T16:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/x64-calling-convention/</loc>
+    <lastmod>2019-10-06T03:24:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/windows-critical-threads/</loc>
+    <lastmod>2019-09-21T17:56:47+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/posts/windows-imports-searcher/</loc>
+    <lastmod>2019-07-27T19:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>/categories/</loc>
+  </url>
+  
+</urlset>
