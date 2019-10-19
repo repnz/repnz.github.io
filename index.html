@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Low Level Pleasure</title>
+  <meta name="description" content="Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  <link href="https://repnz.github.io/index.xml" rel="alternate" type="application/rss+xml" title="Low Level Pleasure" />
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    
+<div class="posts">
+<article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/apc/wow64-user-apc/">APC Series: KiUserApcDispatcher and Wow64</a>
+  </h2>
+  
+    <time datetime="2020-06-28T03:00:00&#43;0300" class="post-date">Sun, Jun 28, 2020</time>
+    I recommend to read the previous posts before reading this one:
+ User APC API: We discussed the user mode API of user APC User APC Internals: We discussed the implementation of user APC in the kernel  Let&rsquo;s continue our discussion about APC internals in windows: This time we&rsquo;ll discuss APC dispatching in user mode and how APC works in Wow64 processes:
+ The evolution of KiUserApcDispatcher Modifications to APC functions to support Wow64 Wow64 APC injection techniques  The evolution of KiUserApcDispatcher NTDLL contains a set of entry points that the kernel uses to run code in user mode like: KiUserExceptionDispatcher, KiUserCallbackDispatcher, &hellip;
+    
+      <div class="read-more-link">
+        <a href="/posts/apc/wow64-user-apc/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/apc/kernel-user-apc-api/">APC Series: User APC Internals</a>
+  </h2>
+  
+    <time datetime="2020-06-03T00:00:00&#43;0300" class="post-date">Wed, Jun 3, 2020</time>
+    Hey! This is the second part of the APC Series, If you haven&rsquo;t read it I recommend you to read the first post about User APC API. where I explore the internals of APC objects in Windows. In this part I&rsquo;ll explain:
+ How to queue user APCs from kernel mode? How user APCs are implemented in the windows kernel? How user APCs are delivered to user mode?  In this blog I won&rsquo;t cover the internals of Special User APCs, because Special User APCs rely on Kernel APC to perform their operation - I&rsquo;ll explore this type in a future post after I explain about Kernel APCs.
+    
+      <div class="read-more-link">
+        <a href="/posts/apc/kernel-user-apc-api/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/apc/user-apc/">APC Series: User APC API</a>
+  </h2>
+  
+    <time datetime="2020-05-17T03:00:00&#43;0300" class="post-date">Sun, May 17, 2020</time>
+    Hey! Long time no see.
+Coronavirus makes it harder for me to write posts, I hope I&rsquo;ll have the time to write - I have a lot I want to share!
+One of the things I did in the last few weeks is to explore the APC mechanism in Windows and I wanted to share some of my findings. The purpose of this series is to allow you to get a systematic understanding of APC internals.
+    
+      <div class="read-more-link">
+        <a href="/posts/apc/user-apc/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/practical-reverse-engineering/dumping-dpc-queues/">Dumping DPC Queues: Adventures in HIGH_LEVEL IRQL</a>
+  </h2>
+  
+    <time datetime="2020-01-18T01:30:37&#43;0200" class="post-date">Sat, Jan 18, 2020</time>
+    This post is part of the Practical Reverse Engineering Exercises series.
+To understand more about the basics of DPCs, read Reversing KeInsertQueueDpc
+(Source code below.)
+Exercise: Write a driver to enumerate all DPCs on the entire system. Make sure you support multi-processor systems! Explain the difficulties and how you solved them.
+Sounds fun! let&rsquo;s start. I thought about dividing this post to 2 posts, but nah
+Using Undocumented APIs in Windows First of all, we need to understand that accessing the DPC queue from a real product is an extremely bad idea because it&rsquo;s a pretty undocumented data structure.
+    
+      <div class="read-more-link">
+        <a href="/posts/practical-reverse-engineering/dumping-dpc-queues/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc/">Reversing DPC: KeInsertQueueDpc</a>
+  </h2>
+  
+    <time datetime="2020-01-05T21:33:37&#43;0200" class="post-date">Sun, Jan 5, 2020</time>
+    Exercise:
+Explain how the following functions work: KeInsertQueueDpc, KiRetireDpcList, KiExecuteDpc, and KiExecuteAllDpcs. If you feel like an overachiever, decompile those functions from the x86 and x64 assemblies and explain the differences.
+If I want to explain the complete solution I&rsquo;ll have to divide this exercise to 2 posts. The first post is pretty simple.. we are going to reverse engineer KeInsertQueueDpc. In future posts we&rsquo;ll continue exploring DPC and we will write code that dumps the DPC queues.
+    
+      <div class="read-more-link">
+        <a href="/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/practical-reverse-engineering/query-module-information/">AuxKlibQueryModuleInformation</a>
+  </h2>
+  
+    <time datetime="2019-12-27T18:33:37&#43;0200" class="post-date">Fri, Dec 27, 2019</time>
+    In this article I&rsquo;m going over the solution to reverse engineering AuxKlibQueryModuleInformation. This exercise is one of the easiest exercises in the book.
+Exercise:
+In the walk-through, we mentioned that a driver can enumerate all loaded modules with the documented API AuxKlibQueryModuleInformation. Does this API guarantee that the returned module list is always up-to-date? Explain your answer. Next, reverse engineer AuxKlibQueryModuleInformation on Windows 8 and explain how it works. How does it handle the case when multiple threads are requesting access to the loaded module list?
+    
+      <div class="read-more-link">
+        <a href="/posts/practical-reverse-engineering/query-module-information/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/practical-reverse-engineering/solutions/">Practical Reverse Engineering Solutions</a>
+  </h2>
+  
+    <time datetime="2019-12-27T18:33:37&#43;0200" class="post-date">Fri, Dec 27, 2019</time>
+    Hey, Here I save all the solutions to the windows kernel chapter of the practical reverse engineering book. The exercises in this book are pretty insightful.
+The target audience of these posts are:
+ People that want to read cool stuff about windows kernel reverse engineering People that want to learn how to break down reverse engineering tasks effeciently People that actually do the exercises and need a reference to the solutions.
+    
+      <div class="read-more-link">
+        <a href="/posts/practical-reverse-engineering/solutions/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/reversing-windows-libraries/">Windows Library Code</a>
+  </h2>
+  
+    <time datetime="2019-12-09T14:00:54&#43;0200" class="post-date">Mon, Dec 9, 2019</time>
+    Intro I thought I will make a guide about windows library code.. The target audience are beginners that want to understand more about windows reverse engineering, development and compilation. I tried to make this guide as simple as possible.
+A &ldquo;Library&rdquo; is a term used in computer science for a collection of pre-written code / variables. Libraries are pretty useful for developers because it saves development time.
+There are 2 types of libraries:
+    
+      <div class="read-more-link">
+        <a href="/posts/reversing-windows-libraries/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/abusing-signed-drivers/">Abusing Signed Windows Drivers</a>
+  </h2>
+  
+    <time datetime="2019-11-13T01:23:57&#43;0200" class="post-date">Wed, Nov 13, 2019</time>
+    The Problem We all know the &ldquo;Driver Signature Enforcement&rdquo; feature in windows. This security feature won&rsquo;t allow you to load unsigned drivers into the windows kernel. To bypass this protection, many attackers use vulnerable signed drivers like turla. They try to find vulnerabilities in these drivers and exploit them. What people don&rsquo;t think about is the fact that it&rsquo;s way simpler than finding an exploitable memory corruption bug in a software driver - sometimes the driver just exposes the functionality via DeviceIoControl and this can be used to perform malicious operations in kernel mode.
+    
+      <div class="read-more-link">
+        <a href="/posts/abusing-signed-drivers/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/autochk-rootkit-analysis/">Autochk Rootkit Analysis</a>
+  </h2>
+  
+    <time datetime="2019-11-01T14:00:00&#43;0300" class="post-date">Fri, Nov 1, 2019</time>
+    Introduction Finally had time to write about this rootkit I saw last week. This rootkit is a very simple, it does not employ any uber fancy methods or something, but I do find it nice so I wanted to share. The name of the driver is &ldquo;autochk.sys&rdquo; - that&rsquo;s why we&rsquo;ll call it the autochk rootkit. The sample is already known (28924b6329f5410a5cca30f3530a3fb8a97c23c9509a192f2092cbdf139a91d8), but I haven&rsquo;t found any public analysis. The rootkit was compiled on the 27/8/2017 according to the PE timestamp.
+    
+      <div class="read-more-link">
+        <a href="/posts/autochk-rootkit-analysis/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/reversing-optimizations-division/">Reverse Engineering Optimizations: Division By Multiplication</a>
+  </h2>
+  
+    <time datetime="2019-10-26T18:06:23&#43;0300" class="post-date">Sat, Oct 26, 2019</time>
+    Intro Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain things, you can save lots of time. Knowning the pattern, the next time you see this optimization you&rsquo;ll recognize right away how to decompile it.
+In this blog post series I&rsquo;ll document how to decompile certain compiler optimizations, I hope it&rsquo;ll save some time for you.
+Division By Multiplication There&rsquo;s no heavy math in this post lol.
+    
+      <div class="read-more-link">
+        <a href="/posts/reversing-optimizations-division/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/about/">About Me</a>
+  </h2>
+  
+  <p>Hey!</p>
+
+<p>My name is Ori Damari, and I love low level code.</p>
+
+<p>I hope you find this blog interesting and learn new stuff ..</p>
+
+<p>I do low level research for living. My main interests are:</p>
+
+<ul>
+<li>Malware</li>
+<li>Operating Systems</li>
+<li>Windows Internals</li>
+<li>Reverse Engineering</li>
+<li>Kernel Development</li>
+<li>Software Development</li>
+</ul>
+
+<p>repnz is my nickname (I pronounce it rep notzero..) - I like assembly.</p>
+
+<p>You can contact me easily using twitter messages: <a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+<p>And this is Misaki from <a href="https://myanimelist.net/anime/11111/Another">&ldquo;Another&rdquo;</a> - one of the characters I like the most;</p>
+
+<p><img src="/about/misaki.png" alt="How I Look Like In Real Life" /></p>
+
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/crt-find-main/">Finding main() easily</a>
+  </h2>
+  
+    <time datetime="2019-10-12T01:30:09&#43;0300" class="post-date">Sat, Oct 12, 2019</time>
+    <p>The entry point of an executable is normally the runtime initialization code - so how can you easily find main()?</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/crt-find-main/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/random-pdc-driver/">Random PDC Driver</a>
+  </h2>
+  
+    <time datetime="2019-10-08T16:37:09&#43;0300" class="post-date">Tue, Oct 8, 2019</time>
+    Found this funny driver: The pdc.sys windows driver has a DriverUnload routine but it calls KeBugCheckEx causing a bluescreen.
+Just run &quot;sc stop pdc&quot; and see for yourself ;)
+I wonder why they registered DriverUnload if the driver does not support unload.. 🤔 pic.twitter.com/TNpKIZGvZX
+&mdash; Ori Damari (@0xrepnz) October 8, 2019  
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/x64-calling-convention/">Reversing the x64 calling convention</a>
+  </h2>
+  
+    <time datetime="2019-10-06T03:24:09&#43;0300" class="post-date">Sun, Oct 6, 2019</time>
+    <p>In this article I will explain how the x64 calling convention looks like in Windows and we&rsquo;ll dive
+into how it influences reverse engineering.</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/x64-calling-convention/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/windows-critical-threads/">Windows Critical Threads</a>
+  </h2>
+  
+    <time datetime="2019-09-21T17:56:47&#43;0300" class="post-date">Sat, Sep 21, 2019</time>
+    <p>In the windows kernel, each kernel object has a Query/SetInformation functions which can be used to
+manipulate the kernel objects members from user/kernel mode. These functions receive an &ldquo;INFOCLASS&rdquo;
+which is basically the member we want to modify/query.</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/windows-critical-threads/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/dotnet-executable-load/">How .NET executables are loaded</a>
+  </h2>
+  
+    <time datetime="2019-09-13T17:56:09&#43;0300" class="post-date">Fri, Sep 13, 2019</time>
+    <p>I&rsquo;ve always wondered how .NET executables are loaded..</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/dotnet-executable-load/">Read More…</a>
+      </div>
+    
+  
+</article><article class="post">
+  <h2 class="post-title">
+    <a href="https://repnz.github.io/posts/windows-imports-searcher/">Windows Imports Searcher</a>
+  </h2>
+  
+    <time datetime="2019-07-27T19:37:09&#43;0300" class="post-date">Sat, Jul 27, 2019</time>
+    <p>Support Windows OS Reversing by searching easily for references to functions across many DLLs</p>
+    
+      <div class="read-more-link">
+        <a href="/posts/windows-imports-searcher/">Read More…</a>
+      </div>
+    
+  
+</article>
+</div>
+    </main>
+
+    
+  </body>
+</html>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>.NET on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/.net/</link>
+    <description>Recent content in .NET on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Fri, 13 Sep 2019 17:56:09 +0300</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/.net/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>How .NET executables are loaded</title>
+      <link>https://repnz.github.io/posts/dotnet-executable-load/</link>
+      <pubDate>Fri, 13 Sep 2019 17:56:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/dotnet-executable-load/</guid>
+      <description>&lt;p&gt;I&amp;rsquo;ve always wondered how .NET executables are loaded..&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>

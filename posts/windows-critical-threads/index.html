@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Windows Critical Threads &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Windows Critical Threads</h1>
+  <time datetime=2019-09-21T17:56:47&#43;0300 class="post-date">Sat, Sep 21, 2019</time>
+  
+  <p>In the windows kernel, each kernel object has a Query/SetInformation functions which can be used to
+manipulate the kernel objects members from user/kernel mode. These functions receive an &ldquo;INFOCLASS&rdquo;
+which is basically the member we want to modify/query.</p>
+
+<p>For example, this is a a small part of the info classes of the thread kernel object:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">enum</span> _THREADINFOCLASS {
+    ThreadBasicInformation, 
+    ThreadTimes, 
+    ThreadPriority,
+    ThreadBasePriority, 
+    ThreadAffinityMask,
+    ThreadImpersonationToken, 
+    ThreadDescriptorTableEntry, 
+    ThreadEnableAlignmentFaultFixup, 
+    ThreadEventPair,
+    ThreadQuerySetWin32StartAddress, 
+    ThreadZeroTlsCell, 
+    ...
+    <span style="color:#f92672">//</span> Many More</code></pre></div>
+
+<p>Exploring these members can yield interesting results. These members can be explored by reverse engineering the
+windows kernel, reading process hacker headers, or looking at the Windows Research Kernel source code.</p>
+
+<p>The ProcessBreakOnTermination member of the process object is commonly used by Malware. It allows someone to mark a certain process as critical, meaning that if you try to kill this process via TerminateProcess, you&rsquo;ll cause a blue-screen.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// Snippet from PspTerminateProcess
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">if</span> (Process<span style="color:#f92672">-&gt;</span>Flags <span style="color:#f92672">&amp;</span> PS_PROCESS_FLAGS_BREAK_ON_TERMINATION) {
+    PspCatchCriticalBreak(
+            <span style="color:#e6db74">&#34;Terminating critical process 0x%p (%s)</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>,
+            Process,
+            Process<span style="color:#f92672">-&gt;</span>ImageFileName
+            );
+}</code></pre></div>
+
+<p>Staring at some process hacker headers I found a lesser known member called ThreadBreakOnTermination 🤔
+Searching google I haven&rsquo;t found anything about it, I guess it may be useful.</p>
+
+<p>As the name implies, this member allows you to set a thread to be critical - so if someone tries to terminate this
+thread, he&rsquo;ll cause a blue-screen. Interestingly, the process can still be terminated by using NtTerminateProccess
+without any problem.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// Needed to enable this flag
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>EnableDebugPrivilege();
+
+BOOL Enable <span style="color:#f92672">=</span> TRUE;
+NTSTATUS Status <span style="color:#f92672">=</span> NtSetInformationThread(
+    GetCurrentThread(),
+    ThreadBreakOnTermination,
+    <span style="color:#f92672">&amp;</span>Enable,
+    <span style="color:#66d9ef">sizeof</span>(Enable)
+);</code></pre></div>
+
+<p>SeDebugPrivilege is needed to set this. Otherwise, normal users could cause blue-screens.</p>
+
+<p>This happened when I killed the thread:</p>
+
+<p><img src="bluescreen.png" alt="BlueScreen" /></p>
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

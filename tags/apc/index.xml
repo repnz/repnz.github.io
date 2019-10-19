@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>APC on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/apc/</link>
+    <description>Recent content in APC on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sun, 28 Jun 2020 03:00:00 +0300</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/apc/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>APC Series: KiUserApcDispatcher and Wow64</title>
+      <link>https://repnz.github.io/posts/apc/wow64-user-apc/</link>
+      <pubDate>Sun, 28 Jun 2020 03:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/wow64-user-apc/</guid>
+      <description>I recommend to read the previous posts before reading this one:
+ User APC API: We discussed the user mode API of user APC User APC Internals: We discussed the implementation of user APC in the kernel  Let&amp;rsquo;s continue our discussion about APC internals in windows: This time we&amp;rsquo;ll discuss APC dispatching in user mode and how APC works in Wow64 processes:
+ The evolution of KiUserApcDispatcher Modifications to APC functions to support Wow64 Wow64 APC injection techniques  The evolution of KiUserApcDispatcher NTDLL contains a set of entry points that the kernel uses to run code in user mode like: KiUserExceptionDispatcher, KiUserCallbackDispatcher, &amp;hellip;</description>
+    </item>
+    
+    <item>
+      <title>APC Series: User APC Internals</title>
+      <link>https://repnz.github.io/posts/apc/kernel-user-apc-api/</link>
+      <pubDate>Wed, 03 Jun 2020 00:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/kernel-user-apc-api/</guid>
+      <description>Hey! This is the second part of the APC Series, If you haven&amp;rsquo;t read it I recommend you to read the first post about User APC API. where I explore the internals of APC objects in Windows. In this part I&amp;rsquo;ll explain:
+ How to queue user APCs from kernel mode? How user APCs are implemented in the windows kernel? How user APCs are delivered to user mode?  In this blog I won&amp;rsquo;t cover the internals of Special User APCs, because Special User APCs rely on Kernel APC to perform their operation - I&amp;rsquo;ll explore this type in a future post after I explain about Kernel APCs.</description>
+    </item>
+    
+    <item>
+      <title>APC Series: User APC API</title>
+      <link>https://repnz.github.io/posts/apc/user-apc/</link>
+      <pubDate>Sun, 17 May 2020 03:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/user-apc/</guid>
+      <description>Hey! Long time no see.
+Coronavirus makes it harder for me to write posts, I hope I&amp;rsquo;ll have the time to write - I have a lot I want to share!
+One of the things I did in the last few weeks is to explore the APC mechanism in Windows and I wanted to share some of my findings. The purpose of this series is to allow you to get a systematic understanding of APC internals.</description>
+    </item>
+    
+  </channel>
+</rss>

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Reverse Engineering Optimizations: Division By Multiplication &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Reverse Engineering Optimizations: Division By Multiplication</h1>
+  <time datetime=2019-10-26T18:06:23&#43;0300 class="post-date">Sat, Oct 26, 2019</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#intro">Intro</a></li>
+<li><a href="#division-by-multiplication">Division By Multiplication</a></li>
+<li><a href="#reverse-engineering-example">Reverse Engineering Example</a></li>
+<li><a href="#exercise">Exercise</a></li>
+<li><a href="#summary">Summary</a></li>
+<li><a href="#references">References</a></li>
+<li><a href="#tweet-link">Tweet Link</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<h2 id="intro">Intro</h2>
+
+<p>Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain
+things, you can save lots of time. Knowning the pattern, the next time you see this optimization you&rsquo;ll recognize right away how to
+decompile it.</p>
+
+<p>In this blog post series I&rsquo;ll document how to decompile certain compiler optimizations, I hope it&rsquo;ll save some time for you.</p>
+
+<h2 id="division-by-multiplication">Division By Multiplication</h2>
+
+<p><em>There&rsquo;s no heavy math in this post lol.</em></p>
+
+<p>While reverse engineering a rootkit sample (That I soon will publish about;) ) I saw this weird assembly code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">mov     ecx, dword ptr [X]        
+mov     rax, <span style="color:#ae81ff">0x3333333333333400</span>          
+mul     rcx                              </code></pre></div>
+
+<p>Every time I see weird assembly code, I think to myself: did the author write this code?
+After understanding what this code does, I knew this is a compiler optimization - This code simply performs a division operation
+without using the &lsquo;div&rsquo; instruction.
+&lsquo;div&rsquo; is an expensive operation for the CPU - even more than multiplication. Let&rsquo;s look how we can understand this optimization:</p>
+
+<p>Let&rsquo;s say we want to divide X by 5. In math, (X / 5) = (X * (<sup>1</sup>&frasl;<sub>5</sub>)). This is the basis of this optimization.
+So, we can invert 5 to the value <sup>1</sup>&frasl;<sub>5</sub> and then use multiplication.</p>
+
+<p>But you may ask: How can we perform (X * (<sup>1</sup>&frasl;<sub>5</sub>)) without using floating point instructions?</p>
+
+<p>We can utilize the &ldquo;mul&rdquo; instruction: The mul instruction performs multiplication between rax and an operand. If the multiplication
+operands are 64 bit, the result of the multiplication can be 128 bit. That&rsquo;s why the result of the &ldquo;mul&rdquo; instruction is stored in 2
+registers:</p>
+
+<ul>
+<li>rax - the lower 64 bit of the result</li>
+<li>rdx - the upper 64 bit of the result</li>
+</ul>
+
+<p>This is a pseudo-code implementation of &lsquo;mul&rsquo;:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">mul</span>(uint64_t operand) { 
+    __int128 result <span style="color:#f92672">=</span> (rax <span style="color:#f92672">*</span> operand);
+    <span style="color:#75715e">// take the lower 64 bits and store in rax
+</span><span style="color:#75715e"></span>    rax <span style="color:#f92672">=</span> (result <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">0xffffffffffffffff</span>);
+
+    <span style="color:#75715e">// store the upper 64 bits and store in rdx
+</span><span style="color:#75715e"></span>    rdx <span style="color:#f92672">=</span> (result <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">64</span>) <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">0xffffffffffffffff</span>;                
+}</code></pre></div>
+
+<p>So how can we utilize this instruction to perform (X * (<sup>1</sup>&frasl;<sub>5</sub>))?</p>
+
+<p>Let&rsquo;s represent a floating point decimal number that way: the upper 64 bits represent the whole number part of the decimal number,
+and the lower bits represent the fractional part. This means that after a mul instruction the whole number part is stored in &ldquo;rdx&rdquo; and the fractional part is stored in rax.</p>
+
+<p>In this representation, 2^64 represents the value 1:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">fractional_part <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
+whole_number    <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>
+
+full_representation: <span style="color:#ae81ff">0</span>x <span style="color:#ae81ff">0000000000000001.0000000000000000</span></code></pre></div>
+
+<p>In this representation, to get the value (<sup>1</sup>&frasl;<sub>5</sub>) we have to divide 2^64 by 5.0:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ae81ff">2</span><span style="color:#f92672">**</span><span style="color:#ae81ff">64</span> <span style="color:#f92672">/</span> <span style="color:#ae81ff">5.0</span> <span style="color:#f92672">=</span>  <span style="color:#ae81ff">0x3333333333333400</span></code></pre></div>
+
+<p><em>(When trying these calculations, beware of floating point truncations and rounding.)</em></p>
+
+<p>So, 0x3333333333333400 represents the number (<sup>1</sup>&frasl;<sub>5</sub>). Now, Let&rsquo;s see how we can divide 10 by 5:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#ae81ff">0x0000000000000000</span> <span style="color:#ae81ff">0x000000000000000A</span> (<span style="color:#ae81ff">10</span>)
+                  <span style="color:#f92672">*</span>
+<span style="color:#ae81ff">0x0000000000000000</span> <span style="color:#ae81ff">0x3333333333333400</span> (<span style="color:#ae81ff">0.2</span>)
+                  <span style="color:#f92672">=</span>
+<span style="color:#ae81ff">0x0000000000000002</span> <span style="color:#ae81ff">0x0000000000000000</span> (<span style="color:#ae81ff">2</span>)
+                 </code></pre></div>
+
+<p>As you can see, using this representation the result is 2. To get the result we have to shift the result right 64 bits to get the
+higher bits. The reason the first operand (10) is not shifted is because we already shifted the second operand.</p>
+
+<p>Let&rsquo;s look at how we can use this trick to optimize away division:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// Real calculation:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>Result <span style="color:#f92672">=</span> (X <span style="color:#f92672">/</span> <span style="color:#ae81ff">5.0</span>)
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Calculation Using Multiplication:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>Result <span style="color:#f92672">=</span> (X <span style="color:#f92672">*</span> (<span style="color:#ae81ff">1</span><span style="color:#f92672">/</span><span style="color:#ae81ff">5.0</span>))
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Calculation using our decimal representation: 
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>Result <span style="color:#f92672">=</span> (X <span style="color:#f92672">*</span> <span style="color:#ae81ff">0x3333333333333400</span>) <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">64</span>
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Calulation using assembly:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">// Store (2^64 / 5.0) in rcx
+</span><span style="color:#75715e"></span>mov rcx, <span style="color:#ae81ff">0x3333333333333400</span> 
+
+<span style="color:#75715e">// Store X in rax.
+</span><span style="color:#75715e"></span>mov rax, qword ptr [X] 
+
+<span style="color:#75715e">// Multiply.
+</span><span style="color:#75715e">// The result of the multiplication is stored in rdx, which stores the higher 64 bits.
+</span><span style="color:#75715e"></span>mul rcx</code></pre></div>
+
+<p>This assembly snippet is basically the snippet from the beginning of the article :)</p>
+
+<p>Combining this trick with shifts can replace the &ldquo;div&rdquo; instruction.</p>
+
+<h2 id="reverse-engineering-example">Reverse Engineering Example</h2>
+
+<p>Let&rsquo;s look at another example:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">mov     rcx, qword ptr [X]
+mov     rax, <span style="color:#ae81ff">0xCCCCCCCCCCCCCCCD</span>
+mul     rcx
+mov     rdi, rdx
+shr     rdi, <span style="color:#ae81ff">4</span></code></pre></div>
+
+<p>Ok, so how can we reverse engineer this?
+Let&rsquo;s first understand what <code>0xCCCCCCCCCCCCCCCD</code> represents by doing the inverse of it&rsquo;s creation:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Python" data-lang="Python"><span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">0xCCCCCCCCCCCCCCCD</span> <span style="color:#f92672">/</span> float(<span style="color:#ae81ff">2</span><span style="color:#f92672">**</span><span style="color:#ae81ff">64</span>)
+<span style="color:#ae81ff">0.8</span></code></pre></div>
+
+<p>Ok, we know that the first &ldquo;mul&rdquo; instruction multiplies X by 0.8 (<sup>4</sup>&frasl;<sub>5</sub>) and stores the result in rdx. After that, there&rsquo;s a shift
+right of 4 bits - which really means dividing by (2^4) = 16. this is the basic formula:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">Result <span style="color:#f92672">=</span> (X <span style="color:#f92672">*</span> <span style="color:#ae81ff">4</span><span style="color:#f92672">/</span><span style="color:#ae81ff">5</span>) <span style="color:#f92672">/</span> <span style="color:#ae81ff">16</span> </code></pre></div>
+
+<p>We can change the representation of the last division:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">(X <span style="color:#f92672">*</span> <span style="color:#ae81ff">4</span><span style="color:#f92672">/</span><span style="color:#ae81ff">5</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">1</span><span style="color:#f92672">/</span><span style="color:#ae81ff">16</span>)</code></pre></div>
+
+<p>Then, combine the last multiplications:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">(X <span style="color:#f92672">*</span> <span style="color:#ae81ff">4</span><span style="color:#f92672">/</span><span style="color:#ae81ff">80</span>) <span style="color:#f92672">-&gt;</span> (X <span style="color:#f92672">*</span> <span style="color:#ae81ff">1</span><span style="color:#f92672">/</span><span style="color:#ae81ff">20</span>)</code></pre></div>
+
+<p>Now we know this code simply divides by 20!</p>
+
+<h2 id="exercise">Exercise</h2>
+
+<p>This is an exercise for the reader:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">mov     rdi, qword ptr [X]
+mov     rax, <span style="color:#ae81ff">0xA41A41A41A41A41B</span>
+mul     rdi             
+sub     rdi, rdx        
+shr     rdi, <span style="color:#ae81ff">1</span>                
+add     rdi, rdx
+shr     rdi, <span style="color:#ae81ff">8</span></code></pre></div>
+
+<h2 id="summary">Summary</h2>
+
+<p>That&rsquo;s it! I hope it was interesting.
+I&rsquo;ll continue posting stuff about cool optimization patterns that hopefully will be helpful.
+Also, I&rsquo;ll post about this rootkit hopefully this week:)</p>
+
+<h2 id="references">References</h2>
+
+<p><a href="https://homepage.divms.uiowa.edu/~jones/bcd/divide.html">https://homepage.divms.uiowa.edu/~jones/bcd/divide.html</a></p>
+
+<p><a href="https://stackoverflow.com/questions/41183935/why-does-gcc-use-multiplication-by-a-strange-number-in-implementing-integer-divi/41224096">https://stackoverflow.com/questions/41183935/why-does-gcc-use-multiplication-by-a-strange-number-in-implementing-integer-divi/41224096</a></p>
+
+<h2 id="tweet-link">Tweet Link</h2>
+
+<blockquote class="twitter-tweet"><p lang="en" dir="ltr">While reverse engineering a rootkit sample (That I soon will publish about 😉) I saw this weird compiler optimization.<br><br>I thought I&#39;ll start documenting compiler optimizations for reverse engineers. Read my first article in the series:<a href="https://t.co/nThidJKygf">https://t.co/nThidJKygf</a> <a href="https://t.co/RufA3fHDa4">pic.twitter.com/RufA3fHDa4</a></p>&mdash; Ori Damari (@0xrepnz) <a href="https://twitter.com/0xrepnz/status/1188113346802999297?ref_src=twsrc%5Etfw">October 26, 2019</a></blockquote>
+<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

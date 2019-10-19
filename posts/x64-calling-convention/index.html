@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Reversing the x64 calling convention &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Reversing the x64 calling convention</h1>
+  <time datetime=2019-10-06T03:24:09&#43;0300 class="post-date">Sun, Oct 6, 2019</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#x64-intro">x64 Intro</a></li>
+<li><a href="#why-is-this-calling-convention-useful">Why Is This Calling Convention Useful?</a></li>
+<li><a href="#reversing-x64-code">Reversing x64 code</a>
+<ul>
+<li><a href="#forwarded-arguments">Forwarded Arguments</a></li>
+<li><a href="#extracting-function-arguments">Extracting Function Arguments</a></li>
+</ul></li>
+<li><a href="#summary">Summary</a></li>
+</ul></li>
+</ul>
+</nav>
+  <p>In this article I will explain how the x64 calling convention looks like in Windows and we&rsquo;ll dive
+into how it influences reverse engineering.</p>
+
+<h2 id="x64-intro">x64 Intro</h2>
+
+<p>So, Ready to talk about some x64 assembly?
+As you may know, windows uses a &ldquo;fastcall&rdquo; calling convention in x64.
+In contrast to most windows 32 bit calling conventions, arguments are passed using registers: RCX,
+RDX, R8, R9, and the rest is passed on the stack.</p>
+
+<p>Let&rsquo;s say I have this function call:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"> 
+<span style="color:#66d9ef">void</span> <span style="color:#a6e22e">FourArgs</span>(<span style="color:#66d9ef">int</span> arg1, <span style="color:#66d9ef">int</span> arg2, <span style="color:#66d9ef">int</span> arg3, <span style="color:#66d9ef">int</span> arg4);
+
+<span style="color:#66d9ef">void</span> <span style="color:#a6e22e">CallFour</span>()
+{
+    FourArgs(<span style="color:#ae81ff">1</span>, <span style="color:#ae81ff">2</span>, <span style="color:#ae81ff">3</span>, <span style="color:#ae81ff">4</span>);
+}
+
+<span style="color:#75715e">// Compiler Output:
+</span><span style="color:#75715e"></span>sub rsp, <span style="color:#ae81ff">40</span> <span style="color:#75715e">// Magical Allocation - explained soon
+</span><span style="color:#75715e"></span>mov r9d, <span style="color:#ae81ff">4</span>  <span style="color:#75715e">// arg4
+</span><span style="color:#75715e"></span>mov r8d, <span style="color:#ae81ff">3</span>  <span style="color:#75715e">// arg3
+</span><span style="color:#75715e"></span>mov edx, <span style="color:#ae81ff">2</span>  <span style="color:#75715e">// arg2
+</span><span style="color:#75715e"></span>mov ecx, <span style="color:#ae81ff">1</span>  <span style="color:#75715e">// arg1
+</span><span style="color:#75715e"></span>call FourArgs
+add rsp, <span style="color:#ae81ff">40</span>
+retn</code></pre></div>
+
+<p>But wait, what is this magical allocation over there? 🤔
+I thought stack space is used only for functions with more than 4 arguments, so what&rsquo;s this?
+Maybe our answer lies in the called function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">FourArgs</span>(<span style="color:#66d9ef">int</span> arg1, <span style="color:#66d9ef">int</span> arg2, <span style="color:#66d9ef">int</span> arg3, <span style="color:#66d9ef">int</span> arg4)
+{
+    <span style="color:#75715e">// This function is empty
+</span><span style="color:#75715e"></span>}
+
+<span style="color:#75715e">// Compiler Output
+</span><span style="color:#75715e"></span>mov [rsp <span style="color:#f92672">+</span> <span style="color:#ae81ff">32</span>], r9d
+mov [rsp <span style="color:#f92672">+</span> <span style="color:#ae81ff">24</span>], r8d
+mov [rsp <span style="color:#f92672">+</span> <span style="color:#ae81ff">16</span>], edx
+mov [rsp <span style="color:#f92672">+</span> <span style="color:#ae81ff">8</span>], ecx
+retn</code></pre></div>
+
+<p>The &ldquo;fastcall&rdquo; convention actually means the caller has to reserve stack space for at least 4 parameters
+(even if the function receives no arguments..! 😨) AND - looks like the called function saves
+ the parameters on the stack. (😮)</p>
+
+<p>This is another example: (debug build)</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">CallAdd</span>()
+{
+    Add(<span style="color:#ae81ff">1</span>, <span style="color:#ae81ff">2</span>, <span style="color:#ae81ff">3</span>, <span style="color:#ae81ff">4</span>, <span style="color:#ae81ff">5</span>);
+}
+
+
+<span style="color:#75715e">// Compiler Output:
+</span><span style="color:#75715e"></span>sub rsp, <span style="color:#ae81ff">56</span>
+
+mov dword ptr [rsp <span style="color:#f92672">+</span> <span style="color:#ae81ff">32</span>], <span style="color:#ae81ff">5</span> <span style="color:#75715e">// arg5
+</span><span style="color:#75715e"></span>mov r9d, <span style="color:#ae81ff">4</span> <span style="color:#75715e">// arg4
+</span><span style="color:#75715e"></span>mov r8d, <span style="color:#ae81ff">3</span> <span style="color:#75715e">// arg3
+</span><span style="color:#75715e"></span>mov edx, <span style="color:#ae81ff">2</span> <span style="color:#75715e">// arg2
+</span><span style="color:#75715e"></span>mov ecx, <span style="color:#ae81ff">1</span> <span style="color:#75715e">// arg1
+</span><span style="color:#75715e"></span>call Add
+add esp, <span style="color:#ae81ff">56</span>
+retn</code></pre></div>
+
+<h2 id="why-is-this-calling-convention-useful">Why Is This Calling Convention Useful?</h2>
+
+<p>Some questions arise regarding this new calling convention:</p>
+
+<ul>
+<li>What is the reason for this movement to fastcall on x64?</li>
+<li>Why are the parameters saved on the stack?</li>
+<li>Why does the caller allocate this stack space and not the called function?</li>
+</ul>
+
+<p>Ahh.. Hard questions.</p>
+
+<p>Probably, the reason for the fastcall calling convention is the addition of new general purpose registers. (r8-r15)
+Architectures with a large number of registers try to utilize the large number of registers by using them for
+arguments and local variables instead of the stack because it&rsquo;s faster.</p>
+
+<p>The reason the function parameters are saved on the stack is for debugging purposes. The compiler
+typically won&rsquo;t use this space to store the parameters on release builds. The compiler is free to
+use this space for anything - for local variables for example.</p>
+
+<p>I don&rsquo;t know why the caller allocates this space and not the called function, sounds weird to me.</p>
+
+<h2 id="reversing-x64-code">Reversing x64 code</h2>
+
+<p>This calling convention makes reverse engineering and hacking a bit harder. For many reasons:</p>
+
+<h3 id="forwarded-arguments">Forwarded Arguments</h3>
+
+<p>Say you have this function: (release build)</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">Annoying:
+    sub rsp, <span style="color:#ae81ff">32</span>
+    
+    <span style="color:#75715e">// local_variable = arg1 + arg2 
+</span><span style="color:#75715e"></span>    mov eax, ecx <span style="color:#75715e">// arg1
+</span><span style="color:#75715e"></span>    add eax, edx <span style="color:#75715e">// arg2
+</span><span style="color:#75715e"></span>
+    ; pass this to DoSomething1
+    mov ecx, eax <span style="color:#75715e">// pass arg1
+</span><span style="color:#75715e"></span>    mov edx, <span style="color:#ae81ff">2</span>   <span style="color:#75715e">// pass arg2
+</span><span style="color:#75715e"></span>    call DoSomething1
+
+    add rsp, <span style="color:#ae81ff">32</span>
+    retn</code></pre></div>
+
+<p>If I had asked you: &ldquo;What are the parameters to DoSomething1&rdquo; - what would you say?
+The obvious answer is: DoSomething1 receives (int, int) and the values are (arg1 + arg2) and 2. right?</p>
+
+<p>But this is actually not correct! The source code is:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">Annoying</span>(<span style="color:#66d9ef">int</span> a, <span style="color:#66d9ef">int</span> b, <span style="color:#66d9ef">int</span> c) 
+{ 
+    <span style="color:#66d9ef">return</span> DoSomething1(a <span style="color:#f92672">+</span> b, <span style="color:#ae81ff">2</span>, c);
+}</code></pre></div>
+
+<p><code>Annoying()</code> contains a third argument! As we said eariler, R8 contains the third argument of functions.
+In this case, it&rsquo;s passed as is to DoSomething1. This means that there&rsquo;s no reason to move it,
+the argument is already in R8. This makes reverse engineering a bit harder because now we have to look at <code>DoSomething1</code>
+to figure out what parameters it receives.</p>
+
+<p>Generally, the best way to know the number of arguments a function receives is to inspect this function. If a function uses R8
+without initializng it, it probably means it receives the third argument from the caller.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">DoSomething1:
+    sub rsp, <span style="color:#ae81ff">32</span>
+
+    mov eax, ecx
+    add eax, edx
+    add eax, r8d <span style="color:#75715e">// R8 is used without initialization
+</span><span style="color:#75715e"></span>
+    add rsp, <span style="color:#ae81ff">32</span>
+    retn</code></pre></div>
+
+<h3 id="extracting-function-arguments">Extracting Function Arguments</h3>
+
+<p>Say we are debugging code compiled with release this is it&rsquo;s source:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">DoSomethingImportantWithReason</span>(<span style="color:#66d9ef">const</span> <span style="color:#66d9ef">char</span><span style="color:#f92672">*</span> reason, <span style="color:#66d9ef">int</span> a, <span style="color:#66d9ef">int</span> b)
+{
+    <span style="color:#75715e">// Do a bunch of stuff
+</span><span style="color:#75715e"></span>    DoSomethingImportant(a, b);
+}
+
+
+<span style="color:#66d9ef">void</span> <span style="color:#a6e22e">DoSomethingImportant</span>(<span style="color:#66d9ef">int</span> a, <span style="color:#66d9ef">int</span> b)
+{
+    <span style="color:#75715e">// Do Something Important
+</span><span style="color:#75715e"></span>}</code></pre></div>
+
+<p>We have a breakpoint on <code>DoSomethingImportant</code>. When the code breaks, we look at the call stack and we see
+that <code>DoSomethingImportantWithReason</code> called it. Now, we want to extract &ldquo;const char* reason&rdquo;.
+To do this in 32bit assembly, we could have looked at the stack and simply see the function&rsquo;s argument. We even had automatic tools
+to do this.</p>
+
+<p>in x64, we have to look at a disassembly of DoSomethingImportantWithReason and see where it stores &ldquo;reason&rdquo;. It makes debugging harder.
+This is the reason that on debug builds the arguments are saved on the stack (like the first example..)</p>
+
+<p>This exact case of extracting stack arguments also can happen if we place hooks.</p>
+
+<h2 id="summary">Summary</h2>
+
+<p>There are more reasons.. But this is it for today:)</p>
+
+<p>If you found any mistake contact me <a href="https://twitter.com/0xrepnz">@0xrepnz</a> ;)
+I hope it was interesting.</p>
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Windows on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/windows/</link>
+    <description>Recent content in Windows on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sun, 28 Jun 2020 03:00:00 +0300</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/windows/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>APC Series: KiUserApcDispatcher and Wow64</title>
+      <link>https://repnz.github.io/posts/apc/wow64-user-apc/</link>
+      <pubDate>Sun, 28 Jun 2020 03:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/wow64-user-apc/</guid>
+      <description>I recommend to read the previous posts before reading this one:
+ User APC API: We discussed the user mode API of user APC User APC Internals: We discussed the implementation of user APC in the kernel  Let&amp;rsquo;s continue our discussion about APC internals in windows: This time we&amp;rsquo;ll discuss APC dispatching in user mode and how APC works in Wow64 processes:
+ The evolution of KiUserApcDispatcher Modifications to APC functions to support Wow64 Wow64 APC injection techniques  The evolution of KiUserApcDispatcher NTDLL contains a set of entry points that the kernel uses to run code in user mode like: KiUserExceptionDispatcher, KiUserCallbackDispatcher, &amp;hellip;</description>
+    </item>
+    
+    <item>
+      <title>APC Series: User APC Internals</title>
+      <link>https://repnz.github.io/posts/apc/kernel-user-apc-api/</link>
+      <pubDate>Wed, 03 Jun 2020 00:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/kernel-user-apc-api/</guid>
+      <description>Hey! This is the second part of the APC Series, If you haven&amp;rsquo;t read it I recommend you to read the first post about User APC API. where I explore the internals of APC objects in Windows. In this part I&amp;rsquo;ll explain:
+ How to queue user APCs from kernel mode? How user APCs are implemented in the windows kernel? How user APCs are delivered to user mode?  In this blog I won&amp;rsquo;t cover the internals of Special User APCs, because Special User APCs rely on Kernel APC to perform their operation - I&amp;rsquo;ll explore this type in a future post after I explain about Kernel APCs.</description>
+    </item>
+    
+    <item>
+      <title>APC Series: User APC API</title>
+      <link>https://repnz.github.io/posts/apc/user-apc/</link>
+      <pubDate>Sun, 17 May 2020 03:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/apc/user-apc/</guid>
+      <description>Hey! Long time no see.
+Coronavirus makes it harder for me to write posts, I hope I&amp;rsquo;ll have the time to write - I have a lot I want to share!
+One of the things I did in the last few weeks is to explore the APC mechanism in Windows and I wanted to share some of my findings. The purpose of this series is to allow you to get a systematic understanding of APC internals.</description>
+    </item>
+    
+    <item>
+      <title>Dumping DPC Queues: Adventures in HIGH_LEVEL IRQL</title>
+      <link>https://repnz.github.io/posts/practical-reverse-engineering/dumping-dpc-queues/</link>
+      <pubDate>Sat, 18 Jan 2020 01:30:37 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/practical-reverse-engineering/dumping-dpc-queues/</guid>
+      <description>This post is part of the Practical Reverse Engineering Exercises series.
+To understand more about the basics of DPCs, read Reversing KeInsertQueueDpc
+(Source code below.)
+Exercise: Write a driver to enumerate all DPCs on the entire system. Make sure you support multi-processor systems! Explain the difficulties and how you solved them.
+Sounds fun! let&amp;rsquo;s start. I thought about dividing this post to 2 posts, but nah
+Using Undocumented APIs in Windows First of all, we need to understand that accessing the DPC queue from a real product is an extremely bad idea because it&amp;rsquo;s a pretty undocumented data structure.</description>
+    </item>
+    
+    <item>
+      <title>Reversing DPC: KeInsertQueueDpc</title>
+      <link>https://repnz.github.io/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc/</link>
+      <pubDate>Sun, 05 Jan 2020 21:33:37 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc/</guid>
+      <description>Exercise:
+Explain how the following functions work: KeInsertQueueDpc, KiRetireDpcList, KiExecuteDpc, and KiExecuteAllDpcs. If you feel like an overachiever, decompile those functions from the x86 and x64 assemblies and explain the differences.
+If I want to explain the complete solution I&amp;rsquo;ll have to divide this exercise to 2 posts. The first post is pretty simple.. we are going to reverse engineer KeInsertQueueDpc. In future posts we&amp;rsquo;ll continue exploring DPC and we will write code that dumps the DPC queues.</description>
+    </item>
+    
+    <item>
+      <title>AuxKlibQueryModuleInformation</title>
+      <link>https://repnz.github.io/posts/practical-reverse-engineering/query-module-information/</link>
+      <pubDate>Fri, 27 Dec 2019 18:33:37 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/practical-reverse-engineering/query-module-information/</guid>
+      <description>In this article I&amp;rsquo;m going over the solution to reverse engineering AuxKlibQueryModuleInformation. This exercise is one of the easiest exercises in the book.
+Exercise:
+In the walk-through, we mentioned that a driver can enumerate all loaded modules with the documented API AuxKlibQueryModuleInformation. Does this API guarantee that the returned module list is always up-to-date? Explain your answer. Next, reverse engineer AuxKlibQueryModuleInformation on Windows 8 and explain how it works. How does it handle the case when multiple threads are requesting access to the loaded module list?</description>
+    </item>
+    
+    <item>
+      <title>Practical Reverse Engineering Solutions</title>
+      <link>https://repnz.github.io/posts/practical-reverse-engineering/solutions/</link>
+      <pubDate>Fri, 27 Dec 2019 18:33:37 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/practical-reverse-engineering/solutions/</guid>
+      <description>Hey, Here I save all the solutions to the windows kernel chapter of the practical reverse engineering book. The exercises in this book are pretty insightful.
+The target audience of these posts are:
+ People that want to read cool stuff about windows kernel reverse engineering People that want to learn how to break down reverse engineering tasks effeciently People that actually do the exercises and need a reference to the solutions.</description>
+    </item>
+    
+    <item>
+      <title>Windows Library Code</title>
+      <link>https://repnz.github.io/posts/reversing-windows-libraries/</link>
+      <pubDate>Mon, 09 Dec 2019 14:00:54 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/reversing-windows-libraries/</guid>
+      <description>Intro I thought I will make a guide about windows library code.. The target audience are beginners that want to understand more about windows reverse engineering, development and compilation. I tried to make this guide as simple as possible.
+A &amp;ldquo;Library&amp;rdquo; is a term used in computer science for a collection of pre-written code / variables. Libraries are pretty useful for developers because it saves development time.
+There are 2 types of libraries:</description>
+    </item>
+    
+    <item>
+      <title>Abusing Signed Windows Drivers</title>
+      <link>https://repnz.github.io/posts/abusing-signed-drivers/</link>
+      <pubDate>Wed, 13 Nov 2019 01:23:57 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/abusing-signed-drivers/</guid>
+      <description>The Problem We all know the &amp;ldquo;Driver Signature Enforcement&amp;rdquo; feature in windows. This security feature won&amp;rsquo;t allow you to load unsigned drivers into the windows kernel. To bypass this protection, many attackers use vulnerable signed drivers like turla. They try to find vulnerabilities in these drivers and exploit them. What people don&amp;rsquo;t think about is the fact that it&amp;rsquo;s way simpler than finding an exploitable memory corruption bug in a software driver - sometimes the driver just exposes the functionality via DeviceIoControl and this can be used to perform malicious operations in kernel mode.</description>
+    </item>
+    
+    <item>
+      <title>Autochk Rootkit Analysis</title>
+      <link>https://repnz.github.io/posts/autochk-rootkit-analysis/</link>
+      <pubDate>Fri, 01 Nov 2019 14:00:00 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/autochk-rootkit-analysis/</guid>
+      <description>Introduction Finally had time to write about this rootkit I saw last week. This rootkit is a very simple, it does not employ any uber fancy methods or something, but I do find it nice so I wanted to share. The name of the driver is &amp;ldquo;autochk.sys&amp;rdquo; - that&amp;rsquo;s why we&amp;rsquo;ll call it the autochk rootkit. The sample is already known (28924b6329f5410a5cca30f3530a3fb8a97c23c9509a192f2092cbdf139a91d8), but I haven&amp;rsquo;t found any public analysis. The rootkit was compiled on the 27/8/2017 according to the PE timestamp.</description>
+    </item>
+    
+    <item>
+      <title>Random PDC Driver</title>
+      <link>https://repnz.github.io/posts/random-pdc-driver/</link>
+      <pubDate>Tue, 08 Oct 2019 16:37:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/random-pdc-driver/</guid>
+      <description>Found this funny driver: The pdc.sys windows driver has a DriverUnload routine but it calls KeBugCheckEx causing a bluescreen.
+Just run &amp;quot;sc stop pdc&amp;quot; and see for yourself ;)
+I wonder why they registered DriverUnload if the driver does not support unload.. 🤔 pic.twitter.com/TNpKIZGvZX
+&amp;mdash; Ori Damari (@0xrepnz) October 8, 2019  </description>
+    </item>
+    
+    <item>
+      <title>Reversing the x64 calling convention</title>
+      <link>https://repnz.github.io/posts/x64-calling-convention/</link>
+      <pubDate>Sun, 06 Oct 2019 03:24:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/x64-calling-convention/</guid>
+      <description>&lt;p&gt;In this article I will explain how the x64 calling convention looks like in Windows and we&amp;rsquo;ll dive
+into how it influences reverse engineering.&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>Windows Critical Threads</title>
+      <link>https://repnz.github.io/posts/windows-critical-threads/</link>
+      <pubDate>Sat, 21 Sep 2019 17:56:47 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/windows-critical-threads/</guid>
+      <description>&lt;p&gt;In the windows kernel, each kernel object has a Query/SetInformation functions which can be used to
+manipulate the kernel objects members from user/kernel mode. These functions receive an &amp;ldquo;INFOCLASS&amp;rdquo;
+which is basically the member we want to modify/query.&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>How .NET executables are loaded</title>
+      <link>https://repnz.github.io/posts/dotnet-executable-load/</link>
+      <pubDate>Fri, 13 Sep 2019 17:56:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/dotnet-executable-load/</guid>
+      <description>&lt;p&gt;I&amp;rsquo;ve always wondered how .NET executables are loaded..&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>Windows Imports Searcher</title>
+      <link>https://repnz.github.io/posts/windows-imports-searcher/</link>
+      <pubDate>Sat, 27 Jul 2019 19:37:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/windows-imports-searcher/</guid>
+      <description>&lt;p&gt;Support Windows OS Reversing by searching easily for references to functions across many DLLs&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>

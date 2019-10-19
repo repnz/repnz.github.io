@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>APC Series: KiUserApcDispatcher and Wow64 &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>APC Series: KiUserApcDispatcher and Wow64</h1>
+  <time datetime=2020-06-28T03:00:00&#43;0300 class="post-date">Sun, Jun 28, 2020</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#the-evolution-of-kiuserapcdispatcher">The evolution of KiUserApcDispatcher</a></li>
+<li><a href="#wow64">WoW64</a></li>
+<li><a href="#apc-compatability-with-wow64">APC Compatability with Wow64</a></li>
+<li><a href="#first-solution-until-windows-7">First solution: Until Windows 7</a>
+<ul>
+<li>
+<ul>
+<li><a href="#wow64-queueuserapc-callstack">Wow64 QueueUserAPC Callstack</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#modern-solution-from-windows-7">Modern solution: From Windows 7</a>
+<ul>
+<li>
+<ul>
+<li><a href="#how-the-encoding-really-works">How the encoding really works</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#64-bit-to-wow64-injection">64 bit to Wow64 injection</a></li>
+<li><a href="#wow64-to-64-bit-injection">Wow64 to 64 bit injection</a>
+<ul>
+<li><a href="#the-wow64-apcroutine-validation">The Wow64 ApcRoutine Validation</a></li>
+</ul></li>
+<li><a href="#more-about-kiuserapcdispatcher">More about KiUserApcDispatcher</a></li>
+<li><a href="#summary">Summary</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<p>I recommend to read the previous posts before reading this one:</p>
+
+<ul>
+<li><a href="/posts/apc/user-apc">User APC API</a>: We discussed the user mode API of user APC</li>
+<li><a href="/posts/apc/kernel-user-apc-api">User APC Internals</a>: We discussed the implementation of user APC in the kernel</li>
+</ul>
+
+<p>Let&rsquo;s continue our discussion about APC internals in windows: This time we&rsquo;ll discuss APC dispatching in user mode and how APC works in Wow64 processes:</p>
+
+<ul>
+<li>The evolution of KiUserApcDispatcher</li>
+<li>Modifications to APC functions to support Wow64</li>
+<li>Wow64 APC injection techniques</li>
+</ul>
+
+<h2 id="the-evolution-of-kiuserapcdispatcher">The evolution of KiUserApcDispatcher</h2>
+
+<p>NTDLL contains a set of entry points that the kernel uses to run code in user mode like: KiUserExceptionDispatcher, KiUserCallbackDispatcher, &hellip;</p>
+
+<p>In the <a href="/posts/apc/kernel-user-apc-api">previous post</a> we saw that User APCs start executing at ntdll!KiUserApcDispatcher in user mode. What is the purpose of
+KiUserApcDispatcher?</p>
+
+<p>To understand KiUserApcDispatcher, Let&rsquo;s explore the evolution of the implementation of KiUserApcDispatcher from old windows versions to the newest implementation. It&rsquo;s important to say that this function is written in assembly but I created a pseudo-code implementation that will help you understand the logic of this function faster:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// Windows XP SP3 32 bit OS
+</span><span style="color:#75715e">// the KiUserApcDispatcher function 
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>VOID 
+<span style="color:#a6e22e">KiUserApcDispatcher</span>(
+    PPS_APC_ROUTINE ApcRoutine, [esp]
+    PVOID SystemArgument1,      [esp<span style="color:#f92672">+</span><span style="color:#ae81ff">4</span>]
+    PVOID SystemArgument2,      [esp<span style="color:#f92672">+</span><span style="color:#ae81ff">8</span>]
+    PVOID SystemArgument3,      [esp<span style="color:#f92672">+</span><span style="color:#ae81ff">0xc</span>]
+    CONTEXT ContextRecord       [esp<span style="color:#f92672">+</span><span style="color:#ae81ff">0x10</span>]
+    )
+{
+    ApcRoutine(
+        SystemArgument1, 
+        SystemArgument2,
+        SystemArgument3
+    );
+
+    NtContinue(<span style="color:#f92672">&amp;</span>ContextRecord, TRUE);
+}</code></pre></div>
+
+<p>The arguments of KiUserApcDispatcher are passed on the stack - we know that this function is written in assembly because of the custom calling convention - this function reads the ApcRoutine from <code>[esp]</code> while normally the return address is stored in <code>[esp]</code> - There&rsquo;s no return address in this case.</p>
+
+<p>The arguments of KiUserApcDispatcher:</p>
+
+<ol>
+<li>ApcRoutine: The &ldquo;NormalRoutine&rdquo; from the KAPC structure.</li>
+<li>SystemArgument1-3 - The arguments of the APC</li>
+<li>ContextRecord - The user mode context that the APC interrupted - In the typical case the instruction pointer is in an alertable wait system call stub, but in case of special user APC it can be anywhere in user mode.</li>
+</ol>
+
+<p>Let&rsquo;s explore the implementation: We can see 2 important functions are called: First, ApcRoutine is called. The &ldquo;ApcRoutine&rdquo; argument to NtQueueApcThread / &ldquo;NormalRoutine&rdquo; of
+the KAPC object - This will invoke the actual code of the APC. This is the pointer that was passed to NtQueueApcThread.</p>
+
+<p>As I explained in the first part of the series, All The pending user APCs has to be executed one after another and only when the queue is empty the OS should return to the context in
+&ldquo;ContextRecord&rdquo; - This is handled by &ldquo;NtContinue&rdquo;:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS
+<span style="color:#a6e22e">NtContinue</span>(
+  PCONTEXT ContextRecord,
+  BOOLEAN TestAlert
+  );</code></pre></div>
+
+<p>This system call receives the ContextRecord from KiUserApcDispatcher. NtContinue is invoked with TestAlert = TRUE, which causes more pending APCs to be execute, if any.</p>
+
+<p>So to summarize, In the original NT design, KiUserApcDispatcher had 2 main responsibilities:</p>
+
+<ol>
+<li>Invoke the APC routine</li>
+<li>Return to kernel mode via NtContinue and invoke more APCs if there are any.</li>
+<li>If there are no APCs pending, return to the previous context inside the ContextRecord argument.</li>
+</ol>
+
+<p>Now let&rsquo;s see how Wow64 influenced KiUserApcDispatcher in 64 bit operating systems.</p>
+
+<h2 id="wow64">WoW64</h2>
+
+<p>Code can be pretty different on 64 bit CPUs. For example:</p>
+
+<ul>
+<li>The pointer size is 8 bytes instead of 4 bytes since the address space is larger.</li>
+<li>Data structure alignment can be different in x64</li>
+<li>The <a href="/posts/x64-calling-convention">calling convention</a> is different (To utilize the additional registers the x64 CPU provides)</li>
+<li>&hellip;.</li>
+</ul>
+
+<p>As you may imagine, the OS and OS APIs had be changed a bit. Most of the API is the same, but the ABI (Application Binary Interface) changed significantly. This
+raises a certain issue with supporting existing 32 bit applications on 64 bit operating systems. That&rsquo;s why Microsoft created a layer called Wow64.</p>
+
+<p>The main purpose of Wow64 (Windows 32 bit on Windows 64 bit) is to make existing 32 bit executables work both on 32 bit operating systems and 64 bit operating systems. It&rsquo;s implemented as a
+compatability emulation layer that mostly emulates APIs of Windows that were changed because of the transition to x64 bit code. The OS has many places that had to be changed to
+adapt to Wow64, As you may imagine, the APC mechanism had to be changed a bit to adapt to Wow64.</p>
+
+<p>A simple explanation of the design of Wow64:</p>
+
+<ul>
+<li>Most of the user mode libraries are compiled both as 64 bit DLLs and 32 bit DLLs. The 64 bit libraries are stored inside c:\windows\system32 and the 32 bit DLLs are stored
+in C:\Windows\SysWow64.</li>
+<li>Wow64 supports only user mode code. All kernel mode code is 64 bit.</li>
+<li>There are 2 versions of ntdll that are loaded into a Wow64 process: 64 bit and 32 bit.</li>
+<li>When an application calls a system call wrapper in the 32 bit ntdll (directly or through Win32), wow64cpu is called to change the CPU mode to 64 bit and invoke wow64.dll.</li>
+<li>wow64.dll has a wrapper per system call. The purpose of these wrappers are to translate the parameters for the 64 bit system calls and invoke the corresponding 64 bit NTDLL routine. Most of these wrappers are auto-generated code, but they can have custom implementation like the wrapper for NtQueueApcThread as we&rsquo;ll see soon.</li>
+<li>At the CPU level, the 32 bit / 64 bit mode transition is done by changing the CS segment that is used. This way, the OS changes from long mode (x64 mode) to IA32 compatibility
+mode. Read (<a href="https://wiki.osdev.org/X86-64#How_do_I_enable_Long_Mode_.3F">https://wiki.osdev.org/X86-64#How_do_I_enable_Long_Mode_.3F</a>) for details about the CPU mode change. In the security community, this is typically referred to as &ldquo;Heaven&rsquo;s Gate&rdquo;.</li>
+<li>Many emulation tricks are used to fix assumptions in 32 bit executables. For example, c:\windows\system32 is redirected to c:\windows\syswow64 inside wow64 processes.</li>
+</ul>
+
+<p>There are many more issues regarding Wow64, this is just a simple explanation that will allow us to understand the Wow64 APC.</p>
+
+<p>To read more about Wow64, I recommend you to read a post by Petr Beneš about Wow64 Internals: (<a href="https://wbenny.github.io/2018/11/04/wow64-internals.html">https://wbenny.github.io/2018/11/04/wow64-internals.html</a>).</p>
+
+<h2 id="apc-compatability-with-wow64">APC Compatability with Wow64</h2>
+
+<p>Ok, so imagine you wrote the following 32 bit application:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">VOID
+WINAPI
+<span style="color:#a6e22e">ApcCode</span>(
+	ULONG_PTR dwData
+	)
+{
+	printf(<span style="color:#e6db74">&#34;32 bit code!</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+}
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>()
+{
+	QueueUserAPC(ApcCode, GetCurrentThread(), <span style="color:#ae81ff">0</span>);
+
+	SleepEx(INFINITE, TRUE);
+}</code></pre></div>
+
+<p>Why is there a compatability issue running this application on a 64 bit operating systems? As we saw at the beginning of the article, the execution of an APC starts at
+ntdll!KiUserApcDispatcher. Note that the kernel does not handle the transition to the Wow64 32 bit mode, so this has to be done in user mode somehow. This means that there
+are no kernel entry points inside the 32 bit NTDLL and execution begins in the 64 bit NTDLL. I hope you get it now: The 64 bit KiUserApcDispatcher has to handle the transition
+somehow before executing the ApcRoutine, which expects to be executed in 32 bit mode. Also, 64 bit code can execute inside a wow64 process. How does the OS know if it needs
+to execute the APC in 32 bit or 64 bit?</p>
+
+<h2 id="first-solution-until-windows-7">First solution: Until Windows 7</h2>
+
+<p>The solution to this issue was implemented long time ago (somewhere around the XP era) and was re-implemented in Windows 7. Let&rsquo;s start by visiting the old implementation and
+we&rsquo;ll also talk about the modern implementation later.</p>
+
+<p>To understand the solution, let&rsquo;s explore the wow64.dll wrapper of NtQueueApcThread on Windows Vista:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// In the source code it&#39;s probably an array, but I think it&#39;s cleaner that way.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _WOW64_NT_QUEUE_APC_THREAD_ARGS {
+    ULONG32 ThreadHandle;
+    ULONG32 ApcRoutine;
+    ULONG32 SystemArgument1;
+    ULONG32 SystemArgument2;
+    ULONG32 SystemArgument3;
+} WOW64_NT_QUEUE_APC_THREAD_ARGS, <span style="color:#f92672">*</span>PWOW64_NT_QUEUE_APC_THREAD_ARGS;
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Windows Vista Implementation of the NtQueueApcThread compatibility wrapper in wow64.dll
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">whNtQueueApcThread</span>(
+    PWOW64_NT_QUEUE_APC_THREAD_ARGS Arguments
+    )
+{
+    PPS_APC_ROUTINE EncodedApcRoutine <span style="color:#f92672">=</span> (PPS_APC_ROUTINE)Arguments<span style="color:#f92672">-&gt;</span>ApcRoutine;
+    PVOID EncodedSystemArgument1 <span style="color:#f92672">=</span> Arguments<span style="color:#f92672">-&gt;</span>SystemArgument1;
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// - Replace the ApcRoutine with wow64!Wow64ApcRoutine
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// - Encode the real address into SystemArgument1
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> (Arguments<span style="color:#f92672">-&gt;</span>ApcRoutine <span style="color:#f92672">!=</span> NULL){
+        EncodedApcRoutine <span style="color:#f92672">=</span> Wow64ApcRoutine;
+        EncodedSystemArgument1 <span style="color:#f92672">=</span> (PVOID)(Arguments<span style="color:#f92672">-&gt;</span>ApcRoutine <span style="color:#f92672">&lt;&lt;</span> <span style="color:#ae81ff">32</span> <span style="color:#f92672">|</span> Arguments<span style="color:#f92672">-&gt;</span>SystemArgument1);
+    }
+
+    <span style="color:#66d9ef">return</span> NtQueueApcThread(
+        Arguments<span style="color:#f92672">-&gt;</span>ThreadHandle,
+        EncodedApcRoutine,
+        EncodedSystemArgument1,
+        Arguments<span style="color:#f92672">-&gt;</span>SystemArgument2,
+        Arguments<span style="color:#f92672">-&gt;</span>SystemArgument3
+    );
+}</code></pre></div>
+
+<p>So let&rsquo;s analyze this routine: First, we can see the WOW64_NT_QUEUE_APC_THREAD_ARGS structure. This is a structure that represents the original arguments that were passed to the
+32 bit NtQueueApcThread. The 32 bit stdcall calling convention passes parameters on the stack. The &ldquo;Arguments&rdquo; pointer is actually a pointer to the stack that contains the
+original arguments of the call to the 32 bit NTDLL.</p>
+
+<p>Ok, so how does this function solve the issue? As you can see, if Arguments-&gt;ApcRoutine is not NULL, it replaces the ApcRoutine with Wow64ApcRoutine. Wow64ApcRoutine is the
+function inside wow64.dll that prepares the arguments for the APC routine and handles the transition to Wow64 32 bit mode. But wait, what about the original ApcRoutine?
+The developers took advantage of the bigger size of the pointers (8 bytes instead of 4) and encoded the original APC routine inside the higher DWORD of SystemArgument1.</p>
+
+<p>By the way, If you were wondering why the ContextRecord is passed as an argument for the ApcRoutine, it&rsquo;s to allow Wow64ApcRoutine to restore this context later. Wow64ApcRoutine
+does not return to the 64 bit KiUserApcDispatcher.</p>
+
+<p>Another function called PsWrapApcWow64Thread was added to the windows kernel to allow drivers to perform this encoding:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// This function wraps the ApcContext and ApcRoutine for Wow64 processes.
+</span><span style="color:#75715e">// This function is not that useful. It works only when the current process is a Wow64 process.
+</span><span style="color:#75715e">// If the current process is a 64 bit process and the target process is a Wow64 process, this function does not work.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">PsWrapApcWow64Thread</span>(
+    __inout PVOID<span style="color:#f92672">*</span> ApcContext,
+    __inout PVOID<span style="color:#f92672">*</span> ApcRoutine
+    );</code></pre></div>
+
+<p>This is a summary of the old flow:</p>
+
+<ol>
+<li>A Wow64 application calls the 32 bit ntdll NtQueueApcThread.</li>
+<li>the 32 bit NtQueueApcThread invokes a wow64 routine that changes the mode to 64 bit.</li>
+<li>Wow64.dll invokes a per-system call wrapper. In this case, it&rsquo;s whNtQueueApcThread.</li>
+<li>whNtQueueApcThread replaces the ApcRoutine with Wow64ApcRoutine and encodes the original routine into SystemArgument1.</li>
+<li>whNtQueueApcThread invokes the real NtQueueApcThread system call.</li>
+<li>When the APC is delivered, KiUserApcDispatcher invokes the APC routine (Wow64ApcRoutine in this case).</li>
+<li>Wow64ApcRoutine handles the transition to 32 bit mode and invokes the 32 bit ntdll KiUserApcDispatcher.</li>
+<li>the 32 bit KiUserApcDispatcher handles the call to the encoded ApcRoutine.</li>
+</ol>
+
+<p><em>One important thing about this issue is that if you develop a hooking or monitoring software and you hook system calls, you have to make sure to decode the Wow64 APC
+correctly.</em></p>
+
+<p>This is a dump of the callstack. It&rsquo;s actually from windows 10 because unfortunately I don&rsquo;t have a vista VM, but the callstack should be pretty similar on Vista.</p>
+
+<h4 id="wow64-queueuserapc-callstack">Wow64 QueueUserAPC Callstack</h4>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly"> RetAddr           Call Site
+00007ffc`4d70545a ntdll!NtQueueApcThread
+00007ffc`4d6f7123 wow64!whNtQueueApcThread+0x2a -&gt; The NtQueueApcThread wrapper.
+00000000`77ae1783 wow64!Wow64SystemServiceEx+0x153
+00000000`77ae1199 wow64cpu!ServiceNoTurbo+0xb 
+
+758122ff ntdll_77af0000!NtQueueApcThread+0xc --&gt; Invoke wow64 to change to 64 bit.
+00652537 KERNELBASE!QueueUserAPC+0x4f
+00652d53 32bitApc!main+0x47                  --&gt; The main routine of our app.
+00652ba7 32bitApc!invoke_main+0x33
+00652a3d 32bitApc!__scrt_common_main_seh+0x157
+00652dd8 32bitApc!__scrt_common_main+0xd
+75f76359 32bitApc!mainCRTStartup+0x8
+77b57c24 KERNEL32!BaseThreadInitThunk+0x19
+77b57bf4 ntdll_77af0000!__RtlUserThreadStart+0x2f
+00000000 ntdll_77af0000!_RtlUserThreadStart+0x1b --&gt; the 32 bit ntdll is executed now.
+
+00007ffc`4d6fc77a wow64cpu!BTCpuSimulate+0x9  --&gt; At this point, we change to 32 bit mode to start 
+00007ffc`4d6fc637 wow64!RunCpuSimulation+0xa      executing the StartAddress of the thread.
+00007ffc`4e1f3f73 wow64!Wow64LdrpInitialize+0x127
+00007ffc`4e1e1d75 ntdll!LdrpInitializeProcess+0x186b
+00007ffc`4e1917d3 ntdll!_LdrpInitialize+0x50589
+00007ffc`4e19177e ntdll!LdrpInitialize+0x3b
+00000000`00000000 ntdll!LdrInitializeThunk+0xe --&gt; Beginning of thread execution.</code></pre></div>
+
+<h2 id="modern-solution-from-windows-7">Modern solution: From Windows 7</h2>
+
+<p>The OS developers were not happy about this implementation. I have a theory about why they changed the implementation, but I&rsquo;m not really sure about it. The main disadvantages
+of this scheme are:</p>
+
+<ol>
+<li>Both ApcRoutine and SystemArgument1 had to be changed in case of a wow64 APC.</li>
+<li>Because the address of Wow64ApcRoutine is taken from the source process, it means wow64.dll has to be mapped at the same address globally.</li>
+<li>To decode the value, we need to get the address of Wow64ApcRoutine so we can test whether it&rsquo;s an encoded value or not.</li>
+</ol>
+
+<p>wow64.dll is a known DLL so practically it&rsquo;s mapped at the same address globally, but maybe it&rsquo;s a constraint that the OS developers didn&rsquo;t want to have. Remember it&rsquo;s just a
+theory, there could be other reasons, though I could not think of other differences between the encoding schemes.</p>
+
+<p>The implementation has changed around Windows 7. The main functions that were changed are whNtQueueApcThread and KiUserApcDispatcher:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// ApcRoutine encoding routines. They are not real functions, so I mark them as FORCEINLINE.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>FORCEINLINE
+ULONG64
+<span style="color:#a6e22e">DecodeWow64ApcRoutine</span>(
+	ULONG64 ApcRoutine
+    )
+{
+	<span style="color:#66d9ef">return</span> (ULONG64)(<span style="color:#f92672">-</span>((INT64)ApcRoutine <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">2</span>));
+}
+
+FORCEINLINE
+ULONG64
+<span style="color:#a6e22e">EncodeWow64ApcRoutine</span>(
+	ULONG64 ApcRoutine
+    )
+{
+	<span style="color:#66d9ef">return</span> (ULONG64)((<span style="color:#f92672">-</span>(INT64)ApcRoutine) <span style="color:#f92672">&lt;&lt;</span> <span style="color:#ae81ff">2</span>);
+}
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Windows 10
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">whNtQueueApcThread</span>(
+    PWOW64_NT_QUEUE_APC_THREAD_ARGS Arguments
+    )
+{
+    PPS_APC_ROUTINE EncodedApcRoutine <span style="color:#f92672">=</span> <span style="color:#960050;background-color:#1e0010">\</span>
+        (PPS_APC_ROUTINE)(EncodeWow64ApcRoutine(Arguments<span style="color:#f92672">-&gt;</span>ApcRoutine));
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Encode only the ApcRoutine
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">return</span> NtQueueApcThread(
+        Arguments<span style="color:#f92672">-&gt;</span>ThreadHandle,
+        EncodedApcRoutine,
+        Arguments<span style="color:#f92672">-&gt;</span>SystemArgument1,
+        Arguments<span style="color:#f92672">-&gt;</span>SystemArgument2,
+        Arguments<span style="color:#f92672">-&gt;</span>SystemArgument3
+    );
+}
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Windows 7 SP1 64 bit 6.1.7601
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>VOID
+<span style="color:#a6e22e">KiUserApcDispatcher</span>(
+    PCONTEXT ContextRecord <span style="color:#75715e">// rsp
+</span><span style="color:#75715e"></span>    )
+{
+    NTSTATUS Status;
+    PPS_APC_ROUTINE ApcRoutine; 
+    PPS_APC_ROUTINE Wow64DecodedApcRoutine; 
+
+    <span style="color:#66d9ef">do</span> {
+        ApcRoutine <span style="color:#f92672">=</span> ContextRecord<span style="color:#f92672">-&gt;</span>P4Home;
+        
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Try to decode the APC routine.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        Wow64DecodedApcRoutine <span style="color:#f92672">=</span> DecodeWow64ApcRoutine(ApcRoutine);
+
+
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// If the result is a 32 bit address, try to invoke the Wow64ApcRoutine.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> (Wow64DecodedApcRoutine <span style="color:#f92672">&lt;=</span> <span style="color:#ae81ff">0xFFFFFFFF</span>) {
+            <span style="color:#66d9ef">if</span> (Wow64ApcRoutine <span style="color:#f92672">!=</span> NULL) {
+
+                PVOID WrappedArgument1 <span style="color:#f92672">=</span> ((ULONGLONG)Wow64DecodedApcRoutine <span style="color:#f92672">&lt;&lt;</span> <span style="color:#ae81ff">32</span>) <span style="color:#f92672">|</span> ContextRecord<span style="color:#f92672">-&gt;</span>P1Home;
+
+                Wow64ApcRoutine(
+                    WrappedArgument1,
+                    ContextRecord<span style="color:#f92672">-&gt;</span>P2Home,
+                    ContextRecord<span style="color:#f92672">-&gt;</span>P3Home,
+                    ContextRecord
+                );
+
+                RtlRaiseStatus(STATUS_INVALID_PARAMETER);
+            }
+        } <span style="color:#66d9ef">else</span> {
+            <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">// If the result is still a 64 bit address, invoke the original ApcRoutine
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>            ApcRoutine(
+                ContextRecord<span style="color:#f92672">-&gt;</span>P1Home,
+                ContextRecord<span style="color:#f92672">-&gt;</span>P2Home,
+                ContextRecord<span style="color:#f92672">-&gt;</span>P3Home,
+                ContextRecord
+            );
+        }
+
+        Status <span style="color:#f92672">=</span> NtContinue(ContextRecord, TRUE);
+
+    } <span style="color:#66d9ef">while</span> (Status <span style="color:#f92672">==</span> STATUS_SUCCESS);
+
+    RtlRaiseStatus(Status);
+}</code></pre></div>
+
+<p>The only encoded argument is the ApcRoutine. The encoding is pretty weird, let&rsquo;s try to explain the encoding. The best way to understand this encoding is by looking at the
+assembly code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Asm" data-lang="Asm">whNtQueueApcThread:
+    <span style="color:#a6e22e">...</span>
+    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">; Encode the ApcRoutine and send to NtQueueApcThread
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">edx</span>, [<span style="color:#66d9ef">rcx</span> <span style="color:#960050;background-color:#1e0010">+</span> <span style="color:#66d9ef">_WOW64_NT_QUEUE_APC_THREAD_ARGS.ApcRoutine</span>]
+    <span style="color:#a6e22e">neg</span> <span style="color:#66d9ef">rdx</span>
+    <span style="color:#a6e22e">shl</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#ae81ff">2</span>
+    <span style="color:#a6e22e">...</span>
+
+KiUserApcDispatcher:
+    <span style="color:#a6e22e">...</span>
+    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">; Decode the ApcRoutine
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rcx</span>, [<span style="color:#66d9ef">rsp</span> <span style="color:#960050;background-color:#1e0010">+</span> <span style="color:#66d9ef">_CONTEXT.P4Home</span>]
+    <span style="color:#a6e22e">sar</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#ae81ff">2</span>
+    <span style="color:#a6e22e">neg</span> <span style="color:#66d9ef">rcx</span>
+    <span style="color:#a6e22e">....</span>
+
+    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">; Check if the ApcRoutine is a wow64 routine.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">; This is done by checking if the decoded value is less than MAX_ULONG
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">;
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">shld</span>    <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">rcx</span>, <span style="color:#ae81ff">32</span>
+	<span style="color:#a6e22e">test</span>    <span style="color:#66d9ef">ecx</span>, <span style="color:#66d9ef">ecx</span>
+	<span style="color:#a6e22e">jz</span>      <span style="color:#66d9ef">short</span> <span style="color:#66d9ef">Wow64Apc</span></code></pre></div>
+
+<p>Ok, so the main assumption of this encoding is: All user addresses have their sign bit off. This is because of the page tables structure. One thing I tried to understand is,
+why not just turn on the sign bit for the Wow64 APC and that&rsquo;s it? I could not figure this out, probably no special reason.</p>
+
+<h4 id="how-the-encoding-really-works">How the encoding really works</h4>
+
+<p>I recommend you to skip these details, unless you really need to. It&rsquo;s pretty annoying to understand that.</p>
+
+<ul>
+<li>If X is a valid user address, decode(X) is a 64 bit APC.
+
+<ul>
+<li>This is because user addresses cannot have their sign bit on.</li>
+<li>The &lsquo;sar&rsquo; instruction will zero the higher 2 bits</li>
+<li>The &lsquo;neg&rsquo; instruction will cause these 2 bits to be 1&rsquo;s.</li>
+</ul></li>
+<li>Is there any case that something is wow64 by mistake?
+
+<ul>
+<li>Considering the fact that the sign bit has to be on, this cannot happen because
+user APCs has to point to a valid user address.</li>
+</ul></li>
+<li>If X is less than MAX_ULONG, decode(X) is a 64 bit APC.
+
+<ul>
+<li>This is caused by the neg instruction, that will turn the zeros in the higher 32 bit to be 1&rsquo;s.</li>
+</ul></li>
+</ul>
+
+<h2 id="64-bit-to-wow64-injection">64 bit to Wow64 injection</h2>
+
+<p>Ok, So how does the Wow64 encoding influences injection?</p>
+
+<p>Regarding 64 bit -&gt; wow64 injection, we can do one of the following:</p>
+
+<ol>
+<li>Run 64 bit APC code inside a Wow64 process. This is the default behavior.</li>
+<li>Run 32 bit APC code inside a Wow64 process, this can be done by encoding the ApcRoutine.</li>
+</ol>
+
+<p>Example code of a DLL injection below. Remember the APC will run only when the target thread will be alertable.</p>
+
+<p>Look at the code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">OpenTargetHandles(
+    Args.TargetProcessId,
+    Args.TargetThreadId,
+    <span style="color:#f92672">&amp;</span>ProcessHandle,
+    <span style="color:#f92672">&amp;</span>ThreadHandle
+);
+
+<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>IsWow64Process(ProcessHandle, <span style="color:#f92672">&amp;</span>IsWow64)) {
+    printf(<span style="color:#e6db74">&#34;IsWow64Process Failed. 0x%08X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, GetLastError());
+    exit(<span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>);
+}
+
+<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>IsWow64) {
+    printf(<span style="color:#e6db74">&#34;The target process is not a wow64 process.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+    exit(<span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>);
+}
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Ok now we have 2 choices:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// - If the DLL is a 32 bit DLL, we need to create a Wow64 APC
+</span><span style="color:#75715e">// - If the DLL is a 64 bit DLL, we need to create a normal APC to ntdll,
+</span><span style="color:#75715e">//   because the 64 bit kernel32 is not loaded.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">if</span> (Is32bitDll(Args.DllPath)) {
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// The DLL we want to load is a 32 bit DLL.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// First, we need to write the path of the library to the remote process.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    RemoteLibraryPath <span style="color:#f92672">=</span> WriteLibraryNameToRemote(ProcessHandle, Args.DllPath);
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// To load this library, we can use the 32 bit LoadLibraryA routine inside kernel32.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    LoadLibraryAWowAddress <span style="color:#f92672">=</span> QueryWow64LoadLibraryAddress(ProcessHandle);
+    
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Because the APC needs to run in a Wow64 environment, we need to encode the routine.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    PPS_APC_ROUTINE ApcRoutine <span style="color:#f92672">=</span> (PPS_APC_ROUTINE)EncodeWow64ApcRoutine((ULONG64)LoadLibraryAWowAddress);
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Use NtQueueApcThread to queue the APC.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    Status <span style="color:#f92672">=</span> NtQueueApcThread(
+        ThreadHandle,
+        ApcRoutine,
+        RemoteLibraryPath,
+        NULL,
+        NULL
+    );
+
+    <span style="color:#75715e">/*
+</span><span style="color:#75715e">    ntdll has a routine called &#34;RtlQueueApcWow64Thread&#34; which can be used to perform the encoding.
+</span><span style="color:#75715e">
+</span><span style="color:#75715e">    Status = RtlQueueApcWow64Thread(
+</span><span style="color:#75715e">                ThreadHandle,
+</span><span style="color:#75715e">                LoadLibraryAWowAddress,
+</span><span style="color:#75715e">                RemoteLibraryPath,
+</span><span style="color:#75715e">                NULL,
+</span><span style="color:#75715e">                NULL
+</span><span style="color:#75715e">            );
+</span><span style="color:#75715e">    */</span>
+}
+<span style="color:#66d9ef">else</span> {
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// The DLL is a 64 bit DLL and we want to load it to a 32 bit process.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// We can use ntdll!LdrLoadDll to do it.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    RemoteLibraryPath <span style="color:#f92672">=</span> WriteUnicodeLibraryNameToRemote(ProcessHandle, Args.DllPath);
+
+    Status <span style="color:#f92672">=</span> NtQueueApcThread(
+        ThreadHandle,
+        (PPS_APC_ROUTINE)LdrLoadDllPtr,
+        NULL,
+        <span style="color:#ae81ff">0</span>,
+        RemoteLibraryPath
+    );
+}
+
+<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)){
+    printf(<span style="color:#e6db74">&#34;NtQueueApcThread Failed. 0x%08X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, GetLastError());
+    exit(<span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>);
+}</code></pre></div>
+
+<p>Full working code is in my apc research repository: <a href="https://github.com/repnz/apc-research/blob/master/x64ToWow64ApcInjector/x64ToWow64ApcInjector.c">https://github.com/repnz/apc-research/blob/master/x64ToWow64ApcInjector/x64ToWow64ApcInjector.c</a></p>
+
+<h2 id="wow64-to-64-bit-injection">Wow64 to 64 bit injection</h2>
+
+<p>The issue with queueing a 64 bit apc from a Wow64 process is that the ApcRoutine cannot be saved inside a 4 bytes pointer. The 32 bit NtQueueApcThread routine can receive
+only a 4 bytes pointer. For certain system calls, there&rsquo;s a solution: The 32 bit NTDLL exports the following functions:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS
+NTAPI
+<span style="color:#a6e22e">NtWow64ReadVirtualMemory64</span>(
+    HANDLE ProcessHandle, 
+    PVOID64 BaseAddress,
+    PVOID BufferData, 
+    ULONG64 BufferLength,
+    PULONG64 ReturnLength
+    );
+
+NTSTATUS
+NTAPI
+<span style="color:#a6e22e">NtWow64WriteVirtualMemory64</span>(
+    HANDLE ProcessHandle, 
+    PVOID64 BaseAddress,
+    PVOID BufferData, 
+    ULONG64 BufferLength,
+    PULONG64 ReturnLength
+    );
+
+NTSTATUS
+NTAPI
+<span style="color:#a6e22e">NtWow64AllocateVirtualMemory64</span>(
+    HANDLE ProcessHandle, 
+    PVOID64<span style="color:#f92672">*</span> BaseAddress,
+    ULONG64 ZeroBits, 
+    PULONG64 RegionSize,
+    ULONG AllocationType,
+    ULONG Protect
+    );
+
+......
+......</code></pre></div>
+
+<p>These functions allow you to perform operations on a 64 bit process from a 32 bit process. They are not system calls, these functions invoke wrappers in wow64.dll that perform
+the actual system call. Unfortunately, for NtQueueApcThread there&rsquo;s no such wrapper. If we want to invoke the NtQueueApcThread with a 64 bit pointer, we need to change to
+64 bit mode somehow and call the system call. To do this, we can perform a far jump and change the CS segment so the CPU mode will be 64 bit mode (&ldquo;Heaven&rsquo;s Gate&rdquo;). Example code
+can be seen below:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">__declspec</span>(align(<span style="color:#ae81ff">16</span>))
+<span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _NT_QUEUE_APC_THREAD_ARGS {
+	DWORD64 ThreadHandle;
+	DWORD64 ApcRoutine;
+	DWORD64 SystemArgument1;
+	DWORD64 SystemArgument2;
+	DWORD64 SystemArgument3;
+} NT_QUEUE_APC_THREAD_ARGS, <span style="color:#f92672">*</span>PNT_QUEUE_APC_THREAD_ARGS;
+
+
+OpenTargetHandles(Args.TargetProcessId, Args.TargetThreadId, <span style="color:#f92672">&amp;</span>ProcessHandle, <span style="color:#f92672">&amp;</span>ThreadHandle);
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Write the path of the DLL to the remote process
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>RemoteLibraryPath <span style="color:#f92672">=</span> WriteUnicodeLibraryNameToRemote(ProcessHandle, Args.DllPath);
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Save the 64 bit arguments on a struct
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>QueueApcArgs.ThreadHandle <span style="color:#f92672">=</span> (DWORD64)ThreadHandle;
+QueueApcArgs.ApcRoutine <span style="color:#f92672">=</span> x64_GetNtdllProcedure(<span style="color:#e6db74">&#34;LdrLoadDll&#34;</span>);
+QueueApcArgs.SystemArgument1 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+QueueApcArgs.SystemArgument2 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+QueueApcArgs.SystemArgument3 <span style="color:#f92672">=</span> (DWORD64)RemoteLibraryPath;
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Find the address of the system call routine in NTDLL
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NtQueueApcThreadAddress <span style="color:#f92672">=</span> x64_GetSyscallAddress(<span style="color:#e6db74">&#34;NtQueueApcThread&#34;</span>);
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Change to 64 bit mode and invoke the system call.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>Status <span style="color:#f92672">=</span> x64_InvokeSyscall(NtQueueApcThreadAddress, <span style="color:#f92672">&amp;</span>QueueApcArgs, <span style="color:#66d9ef">sizeof</span>(QueueApcArgs));</code></pre></div>
+
+<p>To understand more about the implementation, read the code: <a href="https://github.com/repnz/apc-research/blob/master/Wow64To64bitInjector/Wow64To64bitInjector.c">https://github.com/repnz/apc-research/blob/master/Wow64To64bitInjector/Wow64To64bitInjector.c</a></p>
+
+<h3 id="the-wow64-apcroutine-validation">The Wow64 ApcRoutine Validation</h3>
+
+<p>Microsoft added a validation to prevent a programming error: If you try to queue an APC from a 32 bit process to a 64 bit process and you use a 32 bit address, you&rsquo;ll
+get this status code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NtQueueApcThreadEx2:
+....
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Verify that a Wow64 process does not try to queue into a 64 bit process with a 32 bit address.
+</span><span style="color:#75715e">// This is probably a programming bug in the Wow64 program
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">if</span> (PsIsWow64Process(SourceProcess) <span style="color:#f92672">&amp;&amp;</span> PsIs64BitProcess((PEPROCESS)TargetThread<span style="color:#f92672">-&gt;</span>Process)) {
+    <span style="color:#66d9ef">if</span> (DecodeWow64ApcRoutine(ApcRoutine) <span style="color:#f92672">&lt;=</span> <span style="color:#ae81ff">0xFFFFFFFF</span>) {
+        Status <span style="color:#f92672">=</span> STATUS_INVALID_HANDLE;
+        <span style="color:#66d9ef">goto</span> Cleanup;
+    }
+}  
+....  </code></pre></div>
+
+<h2 id="more-about-kiuserapcdispatcher">More about KiUserApcDispatcher</h2>
+
+<p>KiUserApcDispatcher has more responsibilities:</p>
+
+<ol>
+<li>CFG: Validate that the ApcRoutine is a valid indirect call target</li>
+<li>Exception Handling: Wrap the ApcRoutine with an exception handler.
+<br /></li>
+</ol>
+
+<h2 id="summary">Summary</h2>
+
+<p>The main takeaways of these articles are:</p>
+
+<ul>
+<li>KiUserApcDispatcher is the entry point of APCs in user mode.</li>
+<li>In case of Wow64, the APC is encoded so KiUserApcDispatcher could detect and transfer execution to a Wow64 environment.</li>
+<li>If you develop hooking software, make sure you decode the Wow64 apc correctly.</li>
+<li>When we inject to Wow64 process, we can choose whether we want to queue to a 64 bit or 32 bit target code.</li>
+<li>If we want to queue from a Wow64 process to a 64 bit process, we need to switch to long mode and invoke the system call directly.</li>
+</ul>
+
+<p>We finished our adventure in user APCs, In the next posts we&rsquo;ll explore kernel APCs. I hope it was not too long. We will revisit the user APC when we&rsquo;ll talk about special
+user APC.</p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

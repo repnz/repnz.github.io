@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Compiler Optimizations on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/compiler-optimizations/</link>
+    <description>Recent content in Compiler Optimizations on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sat, 26 Oct 2019 18:06:23 +0300</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/compiler-optimizations/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Reverse Engineering Optimizations: Division By Multiplication</title>
+      <link>https://repnz.github.io/posts/reversing-optimizations-division/</link>
+      <pubDate>Sat, 26 Oct 2019 18:06:23 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/reversing-optimizations-division/</guid>
+      <description>Intro Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain things, you can save lots of time. Knowning the pattern, the next time you see this optimization you&amp;rsquo;ll recognize right away how to decompile it.
+In this blog post series I&amp;rsquo;ll document how to decompile certain compiler optimizations, I hope it&amp;rsquo;ll save some time for you.
+Division By Multiplication There&amp;rsquo;s no heavy math in this post lol.</description>
+    </item>
+    
+  </channel>
+</rss>

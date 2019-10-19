@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Assembly on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/assembly/</link>
+    <description>Recent content in Assembly on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sat, 26 Oct 2019 18:06:23 +0300</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/assembly/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Reverse Engineering Optimizations: Division By Multiplication</title>
+      <link>https://repnz.github.io/posts/reversing-optimizations-division/</link>
+      <pubDate>Sat, 26 Oct 2019 18:06:23 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/reversing-optimizations-division/</guid>
+      <description>Intro Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain things, you can save lots of time. Knowning the pattern, the next time you see this optimization you&amp;rsquo;ll recognize right away how to decompile it.
+In this blog post series I&amp;rsquo;ll document how to decompile certain compiler optimizations, I hope it&amp;rsquo;ll save some time for you.
+Division By Multiplication There&amp;rsquo;s no heavy math in this post lol.</description>
+    </item>
+    
+    <item>
+      <title>Finding main() easily</title>
+      <link>https://repnz.github.io/posts/crt-find-main/</link>
+      <pubDate>Sat, 12 Oct 2019 01:30:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/crt-find-main/</guid>
+      <description>&lt;p&gt;The entry point of an executable is normally the runtime initialization code - so how can you easily find main()?&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>Reversing the x64 calling convention</title>
+      <link>https://repnz.github.io/posts/x64-calling-convention/</link>
+      <pubDate>Sun, 06 Oct 2019 03:24:09 +0300</pubDate>
+      
+      <guid>https://repnz.github.io/posts/x64-calling-convention/</guid>
+      <description>&lt;p&gt;In this article I will explain how the x64 calling convention looks like in Windows and we&amp;rsquo;ll dive
+into how it influences reverse engineering.&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>

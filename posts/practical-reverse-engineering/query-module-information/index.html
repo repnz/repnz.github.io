@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>AuxKlibQueryModuleInformation &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>AuxKlibQueryModuleInformation</h1>
+  <time datetime=2019-12-27T18:33:37&#43;0200 class="post-date">Fri, Dec 27, 2019</time>
+  
+  <p>In this article I&rsquo;m going over the solution to reverse engineering AuxKlibQueryModuleInformation. This exercise is one of the easiest exercises in the
+book.</p>
+
+<p>Exercise:</p>
+
+<p><em>In the walk-through, we mentioned that a driver can enumerate all loaded
+modules with the documented API AuxKlibQueryModuleInformation. Does
+this API guarantee that the returned module list is always up-to-date? Explain
+your answer. Next, reverse engineer AuxKlibQueryModuleInformation on
+Windows 8 and explain how it works. How does it handle the case when
+multiple threads are requesting access to the loaded module list? Note:
+The internal function handling this request (and others) is fairly large, so
+you will need some patience. Alternatively, you can use a debugger to
+help you trace the interesting code.</em></p>
+
+<p>Ok, So where can we begin? To solve this exercise, let&rsquo;s divide it to the tasks we need to perform:</p>
+
+<ol>
+<li>Does this API (AuxKlibQueryModuleInformation) guarantee that the returned module list is always up-to-date?</li>
+<li>Reverse engineer AuxKlibQueryModuleInformation on Windows 8 and explain how it works.</li>
+<li>How does it handle the case when multiple threads are requesting access to the loaded module list?</li>
+</ol>
+
+<p>Ok, to solve this exercise will use IDA to statically reverse engineer the functions. In this exercise, we will not use the decompiler to practice reading assembly code. Using a decompiler can save a lot of time, but learning how to navigate in the disassembly window is valuable for reverse engineering.</p>
+
+<p>Let&rsquo;s understand what is &ldquo;AuxKlibQueryModuleInformation&rdquo;:</p>
+
+<p>MSDN: <em>The AuxKlibQueryModuleInformation routine retrieves information about the image modules that the operating system has loaded.</em></p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS <span style="color:#a6e22e">AuxKlibQueryModuleInformation</span>(
+  PULONG BufferSize,
+  ULONG  ElementSize,
+  PVOID  QueryInfo
+);</code></pre></div>
+
+<p>Ok, sounds like it should return a list of images. It&rsquo;s not so clear from the description if the images are the images that are loaded into memory or only those that are loaded
+into the kernel, we&rsquo;ll check this later.</p>
+
+<p>So, to answer the first question our first subtask is to find where &lsquo;AuxKlibQueryModuleInformation&rsquo; is implemented.</p>
+
+<p>Searching ntoskrnl.exe we did not find the function. This means it must be declared somewhere else. Looking at the <a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/aux_klib/nf-aux_klib-auxklibquerymoduleinformation">documentation</a> we see that this function is declared in aux_klib.h and the required library is aux_klib.lib.</p>
+
+<p>LIB files are static libraries. A static library is simply an archive file containing object files that can be used by the linker to
+add code to a binary. Read more about it in my other <a href="https://repnz.github.io/posts/reversing-windows-libraries/">blog-post</a>. (side note: This is why I wrote this post;))</p>
+
+<p>Ok, so now we know this function is defined in <code>aux_klib.lib</code>.</p>
+
+<p>We can use the &ldquo;dumpbin.exe&rdquo; tool to disassemble the lib file. We can also compile a driver that uses the AuxKlibQueryModuleInformation and then look at the compiled binary to see what is the result. After a quick inspection using dumpbin.exe we can see the following function call:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">AuxKlibQueryModuleInformation:
+ .....
+ .....
+  lea         r9,[rsp+20h] ; ReturnLength
+  mov         r8d,esi      ; SystemInformationLength
+  mov         rdx,rbx      ; SystemInformation
+  mov         ecx,0Bh      ; SystemInformationClass
+  call        qword ptr [__imp_ZwQuerySystemInformation] ; &lt;-------
+.....
+.....</code></pre></div>
+
+<p>Looks like AuxKlibQueryModuleInformation uses ZwQuerySystemInformation to query the module list. The definition of the function is:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS WINAPI <span style="color:#a6e22e">ZwQuerySystemInformation</span>(
+  _In_      SYSTEM_INFORMATION_CLASS SystemInformationClass,
+  _Inout_   PVOID                    SystemInformation,
+  _In_      ULONG                    SystemInformationLength,
+  _Out_opt_ PULONG                   ReturnLength
+);</code></pre></div>
+
+<p>The SystemInformationClass is the type of information we would like to query. As you can see in the disassembly, the class
+equals to 0xb - but what is 0xb?</p>
+
+<p>Typically I would search for the SYSTEM_INFORMATION_CLASS enum definition (people on the internet continue documenting undocumented
+classes, for example the process hacker project has good header files) but we will look at the actual implementation of
+ZwQuerySystemInformation to find out the SystemInformationClass, to learn how this can be done.</p>
+
+<p>The implementation of this function resides in ntoskrnl.exe. This is the implementation:</p>
+
+<p><img src="ZwQuerySystemInformation.PNG" alt="ZwQuerySystemInformation" /></p>
+
+<p>This function is a Zw function. Read more about the Zw functions <a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/using-nt-and-zw-versions-of-the-native-system-services-routines">here</a></p>
+
+<p>The Zw functions call the Nt functions and change the PreviousMode to KernelMode. So <code>jmp KiServiceInternal</code> calls
+NtQuerySystemInformation under the hood. The same names exist in ntdll but ntoskrnl.exe contains the actual implementation of the
+system calls. If you look at ntdll you will see the same ID is used before executing &ldquo;syscall&rdquo;.</p>
+
+<p><img src="ntdll_NtQuerySystemInformation.PNG" alt="ntdll NtQuerySystemInformation" /></p>
+
+<p>This is because the kernel Zw functions and the user mode Nt functions both go through the SSDT to extract the system call handler
+pointer. In this case the same function (NtQuerySystemInformation) will be executed in kernel mode.</p>
+
+<p>Ok, so let&rsquo;s repeat our current task: We need to find where SystemInformationClass 0xb leads to. Examining NtQuerySystemInformation
+we see all the ways out go through ExpQuerySystemInformation or return an error status. The SystemInformationClass is passed in rcx
+(this is the register that contains the first parameter..). Note that I did not start reading the disassembly from top to bottom, All
+I want to know is what happens when SystemInformationClass = 0xb.</p>
+
+<p><img src="NtQuerySystemInformation.PNG" alt="NtQuerySystemInformation" /></p>
+
+<p>Tracing rcx we see it does not change before the call to ExpQuerySystemInformation. This means the first parameter to
+ExpQuerySystemInformation is the SystemInformationClass parameter.</p>
+
+<p>Looking at ExpQuerySystemInformation can start tracing the value in rcx. In IDA we can highlight the rcx register and see where it is
+used.</p>
+
+<p><img src="ExpQueryModuleInformation_1.PNG" alt="NtQuerySystemInformation" /></p>
+
+<p>You can see the rcx value is moved to rdi and then it&rsquo;s overridden - now we need to look at rdi.</p>
+
+<p>This is the next usage of the rdi register:</p>
+
+<p><img src="compare_edi.png" alt="NtQuerySystemInformation" /></p>
+
+<p>We know 0xb is less then 0x49, So let&rsquo;s follow loc_14069F19C:</p>
+
+<p><img src="switch_table_edi.png" alt="NtQuerySystemInformation" /></p>
+
+<p>This is an example of a switch statement. This is a table that contains the handlers for the different cases in the switch
+statement. IDA has already found the cases for you! To find the case easily you can use &ldquo;Search Text&rdquo; (Alt-T) and search for
+the following text: &ldquo;case 11&rdquo;. So, after searching for this text we find the following:</p>
+
+<p><img src="follow_switch_table.png" alt="NtQuerySystemInformation" /></p>
+
+<p>Ok! So we found the actual code that queries the list of modules. From it&rsquo;s name, we can understand that the PsLoadedModuleList list
+contains a list of the loaded modules.</p>
+
+<p>Looking at the ExpQueryModuleInformation function we see the following graph:</p>
+
+<p><img src="ExpQueryModuleInformation.PNG" alt="ExpQueryModuleInformation" /></p>
+
+<p>We see a big loop in this function. Looking at the beginning of the function we see:</p>
+
+<p><img src="PsLoadedModuleList.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>For now, we assume this function enumerates this list and returns the images from this list - we will verify this assumption when we&rsquo;ll
+need to. Finally we finished our first task - find what is SystemInformationClass 0xb.</p>
+
+<p>Let&rsquo;s repeat the first question we need to answer:</p>
+
+<ul>
+<li>Does this API (AuxKlibQueryModuleInformation) guarantee that the returned module list is always up-to-date?</li>
+</ul>
+
+<p>So, we need to understand if the returned value &ldquo;is always up-to-date&rdquo;. The general definition of &ldquo;up-to-date&rdquo; can have different
+meanings. But the general answer is: It&rsquo;s not guaranteed the list is up to date after the call to AuxKlibQueryModuleInformation.
+Looks like the PsLoadedModuleList is protected by the ERESOURCE synchronization object (readers-writer lock) PsLoadedModuleResource.
+Before invoking ExpQueryModuleInformation we acquire the lock. But right after that we call ExReleaseResourceLite and the list can be updated
+again. We can assume the PsLoadedModuleList is changed only when the lock is acquired.</p>
+
+<p>If AuxKlibQueryModuleInformation was designed to get an updated version of PsLoadedModuleList it would have let the caller acquire / release the lock
+by himself. In fact, the PsLoadedModuleResource is exported in ntoskrnl in windows 10:</p>
+
+<p><img src="PsLoadedModuleList_export.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Because the ERESOURCE lock can be acquired twice from the same thread, This means the caller can actually:</p>
+
+<ol>
+<li>Acquire the lock</li>
+<li>Call AuxKlibQueryModuleInformation</li>
+<li>Do fun stuff with the list (The list is also exported ;))</li>
+<li>Release the lock when the work is done</li>
+</ol>
+
+<p>This will guarantee the list cannot be updated while the locked is held - This is of course under the assumption that PsLoadedModuleList
+is not updated without taking the lock. This approach is not good enough for actual usage because:</p>
+
+<ol>
+<li>Assuming things like that without actually checking is not valid - this can cause bugs in your product</li>
+<li>Even if we test our assumption and it is correct, Microsoft can change this behavior in any moment (all fair and square in the
+undocumented world) - For example Microsoft sometimes changes the type of locks (ERESOURCE to some other type of lock&hellip;)</li>
+<li>It&rsquo;s not available in windows 7 / 8 - the list and lock aren&rsquo;t exported (this can be a problem, depends on your case)</li>
+</ol>
+
+<p>Just out of curiosity, Let&rsquo;s use the <a href="https://github.com/repnz/windows-imports-searcher">windows import searcher</a> tool to find which modules import these variables:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Nothing" data-lang="Nothing">&gt;python.exe windows_imports_searcher.py search -i index.json -f ntoskrnl.exe!PsLoadedModule*
+Reading file index.json
+c:\windows\system32\drivers\ntosext.sys Imports ntoskrnl.exe!PsLoadedModuleResource
+c:\windows\system32\drivers\ntosext.sys Imports ntoskrnl.exe!PsLoadedModuleList</code></pre></div>
+
+<p>Ok, we see the only driver that imports this list is ntosext.sys. We may have missed other modules that import the loaded module
+list using MmGetSystemRoutineAddress. Also, there are components like debuggers that can make good use of this list. This list was exported in
+windows 10 probably because ntosext.sys was moved out of ntoskrnl.exe, we can verify this too but it&rsquo;s a bit out of scope, I leave this as homework
+for the reader;)</p>
+
+<p>Let&rsquo;s procceed to our next task:</p>
+
+<ul>
+<li>Reverse engineer AuxKlibQueryModuleInformation and explain how it works.</li>
+</ul>
+
+<p>Ok, we have to be careful with this task. &ldquo;explain how it works&rdquo; can be easily misinterpreted as &ldquo;understand every small detail about
+the implementation of AuxKlibQueryModuleInformation&rdquo; - this is not correct. Sometimes in reverse engineering we want to get the general
+picture of something - this &ldquo;something&rdquo; can be a complete program or a specific feature of a program. We have to be careful not to
+spend too much time reversing AuxKlibQueryModuleInformation because all that is needed here is to understand the big picture.</p>
+
+<p>Ok, so we already have some parts of the picture from our analysis of the last task:</p>
+
+<ul>
+<li>AuxKlibQueryModuleInformation is defined inside the aux_klib.lib static library.</li>
+<li>It calls ZwQuerySystemInformation to trigger ExpQuerySystemInformation.</li>
+<li>ExpQuerySystemInformation acquires PsLoadedModuleResource and calls ExpQueryModuleInformation</li>
+<li>We can estimate that ExpQueryModuleInformation takes a snapshot of the list at that moment and saves it to the output buffer.</li>
+<li>The lock is released and the buffer is returned to the user</li>
+</ul>
+
+<p>Ok, actually we can stop analyzing here because we have the big picture. But for the sake of the exercise and because we haven&rsquo;t
+examined ExpQueryModuleInformation let&rsquo;s verify it does what we think it does:)</p>
+
+<p>As I have shown before, this function has a big loop. We can estimate this loop enumerates the entries in the PsLoadedModuleList,
+let&rsquo;s verify:</p>
+
+<p>We can see the following code before the loop:</p>
+
+<p><img src="modules_loop.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Ok, looks like r14 is the loop variable and it&rsquo;s compared to the head of the list. If it points to the head of the list, the loop ends.
+Let&rsquo;s verify r14 is the loop variable:</p>
+
+<p><img src="modules_loop_next.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Yes, looks like the estimation was right. To see generally what this loop does let&rsquo;s look at the usage of r14 inside the loop body:</p>
+
+<p><img src="copy_list_items.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Looks like values from the ListItem structure (which represents a loaded module) are copied to some output structure pointed by rsi.
+Let&rsquo;s verify rsi contains the output buffer for the caller by looking where rsi comes from:</p>
+
+<p><img src="track_rsi_1.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Ok, the answer is: rsi = (SecondParam + 8). Let&rsquo;s see where the second parameter (rdx) comes from:</p>
+
+<p><em>(Inside ExpQuerySystemInformation)</em></p>
+
+<p><img src="track_rsi_2.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>And let&rsquo;s trace rbx: We can use Alt-Up to see where is the first assignment of rbx:</p>
+
+<p><img src="track_rsi_3.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Ok, so rbx contains the fourth parameter to ExpQuerySystemInformation. Let&rsquo;s trace it the caller to see where it comes from:</p>
+
+<p><em>(Inside NtQuerySystemInformation)</em></p>
+
+<p><img src="track_rsi_4.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>Ok, it&rsquo;s the second parameter to NtQuerySystemInformation. Let&rsquo;s see the prototype of this function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">__kernel_entry NTSTATUS <span style="color:#a6e22e">NtQuerySystemInformation</span>(
+  IN SYSTEM_INFORMATION_CLASS SystemInformationClass,
+  OUT PVOID                   SystemInformation,
+  IN ULONG                    SystemInformationLength,
+  OUT PULONG                  ReturnLength
+);</code></pre></div>
+
+<p>Yay! we were correct because the second parameter is SystemInformation - the output parameter for the caller.</p>
+
+<p>Ok let&rsquo;s see the last question:</p>
+
+<ul>
+<li>How does it handle the case when multiple threads are requesting access to the loaded module list?</li>
+</ul>
+
+<p>We already know the answer to that! This is handled using a readers-writer lock. This type of lock allows readers to read the list
+together (it&rsquo;s safe since they do not change the list) BUT in case a writer wants to edit the list, only the writer will have access
+to the list. Weirdly, The query function locks the list with the ExAcquireResourceExclusiveLite function which does not allow someone
+else to read the list. This is weird since this function is supposed to read and not write to the list. After a verification I did not
+find any write to the list inside ExpQueryModuleInformation so it simply looks like bad coding but idk, maybe I don&rsquo;t undestand
+something.</p>
+
+<p>Last but not least, we want to know if the function returns user mode DLLs or not. We can try figuring out what is inserted into PsLoadedModuleList
+statically, but let&rsquo;s solve this problem using dynamic analysis. How can we solve this problem? We can write code that calls AuxKlibQueryModuleInformation
+and look at the return value, but there&rsquo;s an easier way. Remember the body of the loop?</p>
+
+<p><img src="print_module_info.png" alt="ExpQueryModuleInformation" /></p>
+
+<p>We can assume this is a conversion of the name of the image before it&rsquo;s put in the target buffer. Let&rsquo;s put a breakpoint at the call to RtlUnicodeStringToAnsiString
+and look at the source string. To make this work we have to trigger ZwQuerySystemInformation somehow, let&rsquo;s just open process explorer and try to trigger this by clicking
+View-&gt;System Information.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">kd&gt; bp fffff80207203c57 <span style="color:#e6db74">&#34;dS /c 100 rdx; g&#34;</span>
+kd&gt; g
+ffffa78e<span style="color:#e6db74">`</span>7e605f40  <span style="color:#e6db74">&#34;\SystemRoot\system32\ntoskrnl.exe&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e606e90  <span style="color:#e6db74">&#34;\SystemRoot\system32\hal.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e606ef0  <span style="color:#e6db74">&#34;\SystemRoot\system32\kdcom.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e605f40  <span style="color:#e6db74">&#34;\SystemRoot\system32\ntoskrnl.exe&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e606e90  <span style="color:#e6db74">&#34;\SystemRoot\system32\hal.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e606ef0  <span style="color:#e6db74">&#34;\SystemRoot\system32\kdcom.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e606f50  <span style="color:#e6db74">&#34;\SystemRoot\system32\mcupdate_GenuineIntel.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e607d60  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\msrpc.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e607dd0  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\ksecdd.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e607e40  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\werkernel.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e607ec0  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\CLFS.SYS&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e607f30  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\tm.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e608010  <span style="color:#e6db74">&#34;\SystemRoot\system32\PSHED.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e608070  <span style="color:#e6db74">&#34;\SystemRoot\system32\BOOTVID.dll&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e6080e0  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\FLTMGR.SYS&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e608150  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\clipsp.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e6081c0  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\cmimcext.sys&#34;</span>
+ffffa78e<span style="color:#e6db74">`</span>7e608240  <span style="color:#e6db74">&#34;\SystemRoot\System32\drivers\ntosext.sys&#34;</span>
+..................
+...<span style="color:#f92672">(</span>truncated<span style="color:#f92672">)</span>....
+..................</code></pre></div>
+
+<p>From the output we can see that only kernel images are saved in the output list.</p>
+
+<p>As you can see much of the work in reverse engineering is tracing the flow of data in our program. This is one of the aspects that decompilers
+can can do better because they display the information at a higher representation. All the &ldquo;temp&rdquo; movements of variables between registers
+simply won&rsquo;t be in the decompilation view. (Sometimes they will though)</p>
+
+<p>I hope it was helpful, I&rsquo;ll continue posting solutions to practical reverse engineering exercises - next time we&rsquo;ll probably dive into the implementation
+of DPCs in windows;) If you have questions contact me <a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

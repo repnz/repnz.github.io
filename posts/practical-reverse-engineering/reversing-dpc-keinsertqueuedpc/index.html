@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Reversing DPC: KeInsertQueueDpc &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Reversing DPC: KeInsertQueueDpc</h1>
+  <time datetime=2020-01-05T21:33:37&#43;0200 class="post-date">Sun, Jan 5, 2020</time>
+  
+  <p>Exercise:</p>
+
+<p><em>Explain how the following functions work: KeInsertQueueDpc,
+KiRetireDpcList, KiExecuteDpc, and KiExecuteAllDpcs. If you feel like
+an overachiever, decompile those functions from the x86 and x64 assemblies
+and explain the differences.</em></p>
+
+<p>If I want to explain the complete solution I&rsquo;ll have to divide this exercise to 2 posts. The first post is pretty simple.. we are going to reverse engineer KeInsertQueueDpc. In future posts we&rsquo;ll continue exploring DPC and we will write code that dumps
+the DPC queues.</p>
+
+<p>Ok so, what is a DPC?</p>
+
+<p>This is the description of DPCs from MSDN:</p>
+
+<p><em>Because ISRs must execute as quickly as possible, drivers must usually postpone the completion of servicing an interrupt until after the ISR returns. Therefore, the system provides support for deferred procedure calls (DPCs), which can be queued from ISRs and which are executed at a later time and at a lower IRQL than the ISR.</em></p>
+
+<p>This exercise is part of the linked lists chapter so we will focus on understanding the usage of linked lists in these functions. In
+this solution, we&rsquo;ll use static analysis and the symbols from microsoft.</p>
+
+<p>First, disclamer:</p>
+
+<p><em>People that read the book will probably notice the book shows that KDPC has a LIST_ENTRY and not SINGLE_LIST_ENTRY. This is because the DPC mechanism was changed a bit in
+windows 8.1. The core idea is the same, but the data structures were changed a bit. I actually did not know about this change when I started reversing windows 10 DPCs. You&rsquo;ll
+see how I found out about this change soon..</em></p>
+
+<p>This is the _KDPC structure (in windows 10)</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//0x40 bytes (sizeof)
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">struct</span> _KDPC
+{
+    UCHAR Type;                                   <span style="color:#75715e">//0x0
+</span><span style="color:#75715e"></span>    UCHAR Importance;                             <span style="color:#75715e">//0x1
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">volatile</span> USHORT Number;                       <span style="color:#75715e">//0x2
+</span><span style="color:#75715e"></span>    SINGLE_LIST_ENTRY DpcListEntry;               <span style="color:#75715e">//0x8
+</span><span style="color:#75715e"></span>    ULONGLONG ProcessorHistory;                   <span style="color:#75715e">//0x10
+</span><span style="color:#75715e"></span>    PKDEFERRED_PROCEDURE DeferredRoutine;         <span style="color:#75715e">//0x18
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> DeferredContext;                        <span style="color:#75715e">//0x20
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> SystemArgument1;                        <span style="color:#75715e">//0x28
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> SystemArgument2;                        <span style="color:#75715e">//0x30
+</span><span style="color:#75715e"></span>    PVOID DpcData;                                <span style="color:#75715e">//0x38
+</span><span style="color:#75715e"></span>}; 
+
+<span style="color:#66d9ef">struct</span> _KDPC_DATA
+{
+    <span style="color:#66d9ef">struct</span> _KDPC_LIST DpcList;                                              <span style="color:#75715e">//0x0
+</span><span style="color:#75715e"></span>    ULONGLONG DpcLock;                                                      <span style="color:#75715e">//0x10
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">volatile</span> LONG DpcQueueDepth;                                            <span style="color:#75715e">//0x18
+</span><span style="color:#75715e"></span>    ULONG DpcCount;                                                         <span style="color:#75715e">//0x1c
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">struct</span> _KDPC<span style="color:#f92672">*</span> <span style="color:#66d9ef">volatile</span> ActiveDpc;                                       <span style="color:#75715e">//0x20
+</span><span style="color:#75715e"></span>}; 
+
+
+<span style="color:#66d9ef">struct</span> _KDPC_LIST
+{
+    <span style="color:#66d9ef">struct</span> _SINGLE_LIST_ENTRY ListHead;                                     <span style="color:#75715e">//0x0
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">struct</span> _SINGLE_LIST_ENTRY<span style="color:#f92672">*</span> LastEntry;                                   <span style="color:#75715e">//0x8
+</span><span style="color:#75715e"></span>}; </code></pre></div>
+
+<p>The DPC usage pattern in code is simple: Initialize the KDPC object with KeInitializeDpc and queue it with KeInsertQueueDpc. The first
+relevant piece of information we have from this structure definition is the &ldquo;DpcListEntry&rdquo; member of the DPC object. Notice it is
+defined as SINGLE_LIST_ENTRY. It&rsquo;s used to save a pointer to the next DPC object in the queue.</p>
+
+<p>The DpcData structure represents a queue of DPC objects. the KDPC object has a pointer to a member called DpcData. Before windows 8.1, this was a pointer to the KDPC_DATA structure.
+It was changed a bit - we&rsquo;ll see.</p>
+
+<p>The DeferredRoutine is the actual routine that should be executed. The definition is as follows:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">VOID <span style="color:#a6e22e">CustomDpc</span>(
+_In_ <span style="color:#66d9ef">struct</span> _KDPC <span style="color:#f92672">*</span>Dpc,
+_In_opt_ PVOID DeferredContext,
+_In_opt_ PVOID SystemArgument1,
+_In_opt_ PVOID SystemArgument2
+)
+{ ... }</code></pre></div>
+
+<p>We can see the DeferredContext, SystemArgument1 and SystemArgument2 members of the KDPC object. We can assume these members come from
+the DPC object that is executed.</p>
+
+<p>Let&rsquo;s start by analyzing KeInsertQueueDpc. So, as always, we define guiding questions. we&rsquo;ll try to focus on the linked list usage inside
+the function:</p>
+
+<ol>
+<li>How does KeInsertQueueDpc queues the KDPC object and where?<br /></li>
+<li>How does the Importance member of the KDPC object influence the execution of this function?</li>
+</ol>
+
+<p>Guiding questions may be added along the way. Ok so let&rsquo;s start by answering the first question. Where do we start? Simply start
+reading the KeInsertQueueDpc disassembly from top to bottom? No - we are only interested in the queueing process.</p>
+
+<p>To answer this question efficiently, we will start by finding the usage of &ldquo;DpcListEntry&rdquo; in KeInsertQueueDpc.</p>
+
+<p>To do this, we need to understand how KeInsertQueueDpc uses the KDPC object. This is the signature of KeInsertQueueDpc from MSDN:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">BOOLEAN <span style="color:#a6e22e">KeInsertQueueDpc</span>(
+  PRKDPC                 Dpc,
+  PVOID                  SystemArgument1,
+  PVOID                  SystemArgument2
+);</code></pre></div>
+
+<p>Let&rsquo;s look at the disassembly:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">KeInsertQueueDpc:
+    sub     rsp, 38h
+    xor     r9d, r9d        
+    mov     byte ptr [rsp+20h], 0
+    call    KiInsertQueueDpc
+    add     rsp, 38h
+    retn</code></pre></div>
+
+<p>Oh, KeInsertQueueDpc is a wrapper for KiInsertQueueDpc. We can see the first 3 arguments (rcx, rdx, r8) are passed as is to this
+function. These arguments are not important for us right now because the current task is to find the usage of _KDPC.DpcListEntry.
+The KDPC structure is passed as the first argument, meaning it&rsquo;s in rcx.</p>
+
+<p>The first usage of the KDPC argument is at the beginning of the function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">movzx   esi, word ptr [rcx+2]</code></pre></div>
+
+<p>To figure out the structure member inside KDPC that is accessed we use the T shortcut in IDA. To use this shortcut verify that this
+structure is defined in the database in the Structures View. Using IDA we find this is the used member:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">movzx   esi, [rcx+_KDPC.Number]</code></pre></div>
+
+<p>Clearly this is not DpcListEntry. Let&rsquo;s continue looking at the rcx register.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rdi, rcx
+..
+..
+mov     rcx, cr8</code></pre></div>
+
+<p>Ok in this snippet we can see that the DPC object is saved in rdi. Later on, rcx is overridden with another value. Let&rsquo;s inspect
+the usage of the rdi register in the function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">test    [rdi+_KDPC.ProcessorHistory], rax
+jz      loc_140121A26</code></pre></div>
+
+<p>Let&rsquo;s look at the next usage..</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">cmp     [rdi+_KDPC.Type], 0x1A
+jz      loc_140121A78</code></pre></div>
+
+<p>What is 0x1A? We can use the M shortcut of IDA to find the enum symbol:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">cmp     [rdi+_KDPC.Type], ThreadedDpcObject
+jz      loc_140121A78</code></pre></div>
+
+<p>Ok, what is ThreadedDpcObject?</p>
+
+<p>&ldquo;<em>A threaded DPC is a DPC that the system executes at IRQL = PASSIVE_LEVEL. An ordinary DPC preempts the execution of all threads, and cannot be preempted by a thread or by another DPC. If the system has a large number of ordinary DPCs queued, or if one of those DPCs runs for a long time, every thread will remain paused for an arbitrarily long time. Thus, each ordinary DPC increases system latency, which can hurt the performance of time-sensitive applications, such as audio or video playback. Conversely, a threaded DPC can be preempted by an ordinary DPC, but not by other threads. Therefore, you should use threaded DPCs rather than ordinary DPCs—unless a particular DPC must not be preempted, not even by another DPC.</em>&ldquo;</p>
+
+<p>Ok this may be interesting for our original question, so we add the following question to our guiding questions:</p>
+
+<p><em>Does using a threaded DPC object influence the way it&rsquo;s inserted to the queue?</em></p>
+
+<p>Let&rsquo;s continue looking for usages of rdi.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rcx, [rbp+2D90h]
+cmovnz  rcx, rax
+xor     eax, eax
+lock cmpxchg [rdi+_KDPC.DpcData], rcx</code></pre></div>
+
+<p>Ok.. Looks like the DpcData member is set to something. We will inspect this later, let&rsquo;s find DpcListEntry first. Let&rsquo;s add the following
+question to our list of questions:</p>
+
+<p><em>What is the value of KDPC.DpcData after the function call?</em></p>
+
+<p>Ok let&rsquo;s see the next usage:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     [rdi+_KDPC.SystemArgument1], rdx
+mov     [rdi+_KDPC.SystemArgument2], r8</code></pre></div>
+
+<p>the SystemArgument1 and SystemArgument2 function parameters are saved in the KDPC structure.</p>
+
+<p>Ok let&rsquo;s see the next usage:</p>
+
+<p><img src="dpc_insert.png" alt="InsertIntoQueue" /></p>
+
+<p>Finally! It&rsquo;s a usage of the DpcListEntry member. Looks like the DPC object entry is saved in a list originated in &ldquo;rsi&rdquo;. Let&rsquo;s trace rsi to understand what is it&rsquo;s value:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">lea     rsi, [rbx+rax]</code></pre></div>
+
+<p>Ok, what are the values of rbx and rax?</p>
+
+<p>Let&rsquo;s start with rbx:</p>
+
+<p><img src="set_rbx.PNG" alt="InsertIntoQueue" /></p>
+
+<p>Ok - the value of rbx can come from 2 locations:</p>
+
+<ul>
+<li>KiProcessorBlock[rcx]: We don&rsquo;t know what is KiProcessorBlock yet.</li>
+<li>the rbp register</li>
+</ul>
+
+<p>The rbp register gets it&rsquo;s value from:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rbp, gs:20h</code></pre></div>
+
+<p>In kernel mode, gs contains a pointer to the _KPCR structure. This is a per processor structure that contains information about state
+of the current CPU. We can look for the structure member:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rbp, gs:_KPCR.CurrentPrcb</code></pre></div>
+
+<p>This is the pointer to the _KPRCB (Processor Control Block) which is a sub-structure inside the _KPCR. Seems like the KiProcessorBlock
+array also contains pointers to the _KPRCB structures. We can verify that by debugging the machine and looking at the content of
+KiProcessorBlock (I already know KiProcessorBlock so I won&rsquo;t do it but you&rsquo;re welcome to try).</p>
+
+<p>Now we now rbx contains a pointer to the Prcb but let&rsquo;s figure out the logic of the image above. The value is taken from the
+KiProcessorBlock[si - 0x500] if si is higher than 0x500. If not, the value is taken from the gs:CurrentPrcb - the current CPU.</p>
+
+<p>The value of si is Dpc.Number at the beginning of the function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">movzx   esi, [rcx+_KDPC.Number]</code></pre></div>
+
+<p>Now we can see: This code decides which CPU is the target CPU of the DPC. The Prcb of that CPU is taken and it&rsquo;s used to save
+DpcListEntry - seems logical.</p>
+
+<p>But what is this 0x500? We can see at KeSetTargetProcessorDpcEx:</p>
+
+<p>set_target_processor</p>
+
+<p>So if we return back to our original instruction we tried to figure out:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">lea     rsi, [rbx_DpcTargetPrcb+rax]</code></pre></div>
+
+<p>Let&rsquo;s see what is the value of rax -</p>
+
+<p><img src="threaded_dpc_check.png" alt="InsertIntoQueue" /></p>
+
+<p>Ok so this is equal to the following logic:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">if</span> (Dpc.Type <span style="color:#f92672">==</span> ThreadedDpcObject <span style="color:#f92672">&amp;&amp;</span> DpcTargetPrcb.ThreadDpcEnable) { 
+    PrcbOffset <span style="color:#f92672">=</span> <span style="color:#ae81ff">0x2e28</span>;
+} <span style="color:#66d9ef">else</span> {
+    PrcbOffset <span style="color:#f92672">=</span> <span style="color:#ae81ff">0x2e00</span>;
+}</code></pre></div>
+
+<p>Let&rsquo;s look what are these offsets in KPRCB:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">    ULONGLONG PrcbPad41[<span style="color:#ae81ff">6</span>];                                                 <span style="color:#75715e">//0x2dd0
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">struct</span> _KDPC_DATA DpcData[<span style="color:#ae81ff">2</span>];                                           <span style="color:#75715e">//0x2e00
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> DpcStack;                                                         <span style="color:#f92672">//</span><span style="color:#ae81ff">0x2e50</span></code></pre></div>
+
+<p>Ok! Seems logical. The DpcData is an array of 2 elements. based on this we can conclude that:</p>
+
+<ol>
+<li>The Prcb of the target CPU is taken (Using Dpc.Number)</li>
+<li>If the DPC object is a Threaded DPC and Threaded DPC are enabled, the threaded DPC queue is fetched. (The second element)</li>
+<li>Else the regular DPC queue is fetched. (The first element in the DpcData array.)</li>
+</ol>
+
+<p>Ok, let&rsquo;s return to the original reason we wanted to understand what is the value of rsi. Now we know rsi points to the correct
+DpcData structure that describes the queue of Dpcs.</p>
+
+<p>Ok so until now, we know the following code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// ....
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Fetch the PRCB of the target CPU
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>PKPRCB TargetCpuPrcb;
+
+<span style="color:#66d9ef">if</span> (Dpc<span style="color:#f92672">-&gt;</span>Number <span style="color:#f92672">&gt;=</span> <span style="color:#ae81ff">0x500</span>) { 
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// The user called KeSetTargetProcessorDpc to change the target CPU.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    ULONG CpuId <span style="color:#f92672">=</span> Cpu<span style="color:#f92672">-&gt;</span>Number <span style="color:#f92672">-</span> <span style="color:#ae81ff">0x500</span>;
+    TargetCpuPrcb <span style="color:#f92672">=</span> KiProcessorBlock[CpuId];
+} <span style="color:#66d9ef">else</span> {
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Get the current CPU
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    TargetCpuPrcb <span style="color:#f92672">=</span> KeGetCurrentPrcb();
+}
+
+<span style="color:#75715e">// ....
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Find the target DPC queue based on the type of the DPC
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>PKDPC_DATA TargetDpcQueue;
+
+<span style="color:#66d9ef">if</span> (Dpc.Type <span style="color:#f92672">==</span> ThreadedDpcObject <span style="color:#f92672">&amp;&amp;</span> DpcTargetPrcb.ThreadDpcEnable) {
+    TargetDpcQueue <span style="color:#f92672">=</span> TargetCpuPrcb.DpcData[<span style="color:#ae81ff">1</span>]; <span style="color:#75715e">// offset 0x2e28
+</span><span style="color:#75715e"></span>} <span style="color:#66d9ef">else</span> {
+    TargetDpcQueue <span style="color:#f92672">=</span> TargetCpuPrcb.DpcData[<span style="color:#ae81ff">0</span>]; <span style="color:#75715e">// offset 0x2e00
+</span><span style="color:#75715e"></span>}
+
+<span style="color:#75715e">// ....
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Queue the DPC
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">if</span> (Dpc<span style="color:#f92672">-&gt;</span>Importance <span style="color:#f92672">==</span> HighImportance) { 
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Insert Head - because it&#39;s more important
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>TargetDpcQueue.DpcList.ListHead.Next) { 
+        <span style="color:#75715e">// probably means the list is empty.. 
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// we need to maintain the LastEntry member
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// initialize the LastEntry to point to the first entry.
+</span><span style="color:#75715e"></span>        TargetDpcQueue.DpcList.LastEntry <span style="color:#f92672">=</span> DpcListEntry;
+    }
+
+    DpcListEntry<span style="color:#f92672">-&gt;</span>Next <span style="color:#f92672">=</span> <span style="color:#f92672">&amp;</span>TargetDpcQueue.DpcList.ListHead<span style="color:#f92672">-&gt;</span>Next;
+    TargetDpcQueue<span style="color:#f92672">-&gt;</span>DpcList.ListHead<span style="color:#f92672">-&gt;</span>Next <span style="color:#f92672">=</span> DpcListEntry;
+
+} <span style="color:#66d9ef">else</span> {
+    <span style="color:#75715e">// 
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Insert Tail
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    DpcListEntry<span style="color:#f92672">-&gt;</span>Next <span style="color:#f92672">=</span> NULL;
+    TargetDpcQueue<span style="color:#f92672">-&gt;</span>DpcList.LastEntry<span style="color:#f92672">-&gt;</span>Next <span style="color:#f92672">=</span> DpcListEntry;
+    TargetDpcQueue<span style="color:#f92672">-&gt;</span>DpcList.LastEntry <span style="color:#f92672">=</span> DpcListEntry;
+
+}</code></pre></div>
+
+<p>Ok, so I think we have answers to our questions:</p>
+
+<ol>
+<li>How does KeInsertQueueDpc queue the KDPC object and where?</li>
+<li>How does the Importance member of the KDPC object influence the execution of this function?</li>
+<li>Does using a threaded DPC object influence the way it&rsquo;s inserted to the queue?</li>
+</ol>
+
+<p>Each CPU has 2 queues - one for threaded DPC objects and one for normal DPCs. The DpcData member of the PRCB structure holds these
+queues. The queues are represented by the KDPC_DATA structure. Under KDPC_DATA there&rsquo;s a structure named KDPC_LIST and it holds two
+pointers: ListHead and LastEntry. The queue is represented using a singly linked list.</p>
+
+<p>When inserting a DPC object into the queue, KeInsertQueueDpc checks the importance field. If the importance is HighImportance, the
+DPC object is inserted into the head of the list. If not, the DPC object is inserted at the end of the list.</p>
+
+<p>Ok so now we have answers based on partial inspection of KeInsertQueueDpc. These answers are not full - we may missed some information.
+For example, we haven&rsquo;t checked if the Importance field is used elsewhere in the function - it could influence other things. Same thing
+for the ThreadedDpcObject. So we have to continue looking at references to the Importance field to give a full answer. Currently we are
+satisfied with our answer because it&rsquo;s all needed to understand the linked lists inside this function.</p>
+
+<p>Let&rsquo;s continue to the next question we had: What is the value of KDPC.DpcData after the function call?</p>
+
+<p>Ok so the first snippet that changes the DpcData is right here:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     r10d, [rsp+98h+TargetCpuNumber]
+mov     eax, 1
+cmp     r10d, [rbp_SourcePrcb+_KPRCB.Number]
+mov     rcx, [rbp_SourcePrcb+_KPRCB.IsrDpcStats]
+cmovnz  rcx, rax ; if it&#39;s a different CPU move rax into rcx else move IsrDpcStats
+xor     eax, eax ; the value of RCX
+lock cmpxchg [rdi+_KDPC.DpcData], rcx
+jnz     short loc_14012181A</code></pre></div>
+
+<p>You may wonder why the IsrDpcStats structure is saved in the DpcData member? Well, I wondered too. This is a bit out of scope but I
+started analyzing IsrDpcStats and the DpcData member of the KDPC object AND it turns out that the DpcData member does not point to the KDPC_DATA structure anymore! In windows 8.1 microsoft changed the implementation of KDPC a bit and the DpcData member is used now to save
+a pointer to the IsrDpcStats structure, I&rsquo;ll not dive into this though I recommend the courious readers to set hardware breakpoints and try to understand how he IsrDpcStats structure is used;)</p>
+
+<p>This change makes finding the pointer to the KDPC_DATA more annoying since the only place we can find it is in the KPRCB.. We&rsquo;ll see
+how this can be done (reliably?) in the third part of the solution.</p>
+
+<p>Next time we&rsquo;ll talk about the way DPC objects get executed.</p>
+
+<p><a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

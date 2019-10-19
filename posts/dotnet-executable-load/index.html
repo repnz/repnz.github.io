@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>How .NET executables are loaded &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>How .NET executables are loaded</h1>
+  <time datetime=2019-09-13T17:56:09&#43;0300 class="post-date">Fri, Sep 13, 2019</time>
+  
+  <p>I&rsquo;ve always wondered how .NET executables are loaded..</p>
+
+<p>Loading a .NET executable into IDA Pro, I saw that the entry point contains this jump statement to _CorExeMain.
+It looked like this function call loads the CLR and starts running the .NET code.</p>
+
+<p><img src="jmp_CorExeMain.png" alt="Jump To CorExeMain" /></p>
+
+<p>This made me think that I can patch the entry point to add native code before the CLR is loaded -
+this can be useful to hide shellcode or pack executables for example.
+So, I wrote a simple &ldquo;Hello World&rdquo; program in C# and I tried to change the &ldquo;HelloWorld&rdquo; string before calling _CorExeMain:</p>
+
+<p><img src="Patch_jmpCorExeMain.png" alt="Patch Jump To CorExeMain" /></p>
+
+<p>But it turns out that this code does not run at all. I know it because I tried replacing the jump statement with nops
+and the program still worked. btw, On x64 binaries, this stub does not exist at all. (I guess it&rsquo;s some compiler flag or something)</p>
+
+<p>This stub was used on older versions of windows. On newer versions, ntdll!LdrpInitializeProcess sets ntdll!_UseCOR to TRUE
+if the .NET Metadata directory exists. After that, ntdll calls MSCOREE!_CorExeMain by itself. Goodbye cool packing techniques:(</p>
+
+<p><img src="CheckUseCor.png" alt="Check UseCor" /></p>
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

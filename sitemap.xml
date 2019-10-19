@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  
+  <url>
+    <loc>https://repnz.github.io/tags/apc/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/apc/wow64-user-apc/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/kernel/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/reversing/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/windows/</loc>
+    <lastmod>2020-06-28T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/apc/kernel-user-apc-api/</loc>
+    <lastmod>2020-06-03T00:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/apc/user-apc/</loc>
+    <lastmod>2020-05-17T03:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/practical-reverse-engineering/dumping-dpc-queues/</loc>
+    <lastmod>2020-01-18T01:30:37+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc/</loc>
+    <lastmod>2020-01-05T21:33:37+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/practical-reverse-engineering/query-module-information/</loc>
+    <lastmod>2019-12-27T18:33:37+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/practical-reverse-engineering/solutions/</loc>
+    <lastmod>2019-12-27T18:33:37+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/development/</loc>
+    <lastmod>2019-12-09T14:00:54+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/reversing-windows-libraries/</loc>
+    <lastmod>2019-12-09T14:00:54+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/abusing-signed-drivers/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/malware/</loc>
+    <lastmod>2019-11-13T01:23:57+02:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/autochk-rootkit-analysis/</loc>
+    <lastmod>2019-11-01T14:00:00+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/assembly/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/compiler-optimizations/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/reversing-optimizations-division/</loc>
+    <lastmod>2019-10-26T18:06:23+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/about/</loc>
+    <lastmod>2019-10-19T19:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/crt-find-main/</loc>
+    <lastmod>2019-10-12T01:30:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/random-pdc-driver/</loc>
+    <lastmod>2019-10-08T16:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/x64-calling-convention/</loc>
+    <lastmod>2019-10-06T03:24:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/windows-critical-threads/</loc>
+    <lastmod>2019-09-21T17:56:47+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/tags/.net/</loc>
+    <lastmod>2019-09-13T17:56:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/dotnet-executable-load/</loc>
+    <lastmod>2019-09-13T17:56:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/posts/windows-imports-searcher/</loc>
+    <lastmod>2019-07-27T19:37:09+03:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://repnz.github.io/categories/</loc>
+  </url>
+  
+</urlset>

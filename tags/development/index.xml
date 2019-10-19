@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Development on Low Level Pleasure</title>
+    <link>https://repnz.github.io/tags/development/</link>
+    <description>Recent content in Development on Low Level Pleasure</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Mon, 09 Dec 2019 14:00:54 +0200</lastBuildDate>
+    
+	<atom:link href="https://repnz.github.io/tags/development/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Windows Library Code</title>
+      <link>https://repnz.github.io/posts/reversing-windows-libraries/</link>
+      <pubDate>Mon, 09 Dec 2019 14:00:54 +0200</pubDate>
+      
+      <guid>https://repnz.github.io/posts/reversing-windows-libraries/</guid>
+      <description>Intro I thought I will make a guide about windows library code.. The target audience are beginners that want to understand more about windows reverse engineering, development and compilation. I tried to make this guide as simple as possible.
+A &amp;ldquo;Library&amp;rdquo; is a term used in computer science for a collection of pre-written code / variables. Libraries are pretty useful for developers because it saves development time.
+There are 2 types of libraries:</description>
+    </item>
+    
+  </channel>
+</rss>

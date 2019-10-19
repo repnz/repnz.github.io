@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Windows Library Code &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Windows Library Code</h1>
+  <time datetime=2019-12-09T14:00:54&#43;0200 class="post-date">Mon, Dec 9, 2019</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#intro">Intro</a></li>
+<li><a href="#the-empty-binary">The Empty Binary</a></li>
+<li><a href="#the-bare-program-many-object-files">The Bare Program: Many Object Files</a>
+<ul>
+<li><a href="#whole-program-optimization">Whole Program Optimization</a></li>
+</ul></li>
+<li><a href="#static-library-development">Static Library Development</a></li>
+<li><a href="#dynamic-library-development">Dynamic Library Development</a>
+<ul>
+<li><a href="#creating-a-dynamic-library">Creating a dynamic library</a></li>
+<li><a href="#using-a-dll-with-loadlibrary-and-getprocaddress">Using a DLL with LoadLibrary() and GetProcAddress()</a></li>
+<li><a href="#using-the-import-table-to-load-dlls">Using the import table to load DLLs</a>
+<ul>
+<li><a href="#what-does-declspec-dllimport-do">What does __declspec(dllimport) do?</a></li>
+<li><a href="#revisiting-the-whole-program-optimization">Revisiting the whole program optimization</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#references">References</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<h2 id="intro">Intro</h2>
+
+<p>I thought I will make a guide about windows library code.. The target audience are beginners that want to understand more about windows reverse engineering, development and compilation. I tried to make this guide as simple as possible.</p>
+
+<p>A &ldquo;Library&rdquo; is a term used in computer science for a collection of pre-written code / variables. Libraries are pretty useful
+for developers because it saves development time.</p>
+
+<p>There are 2 types of libraries:</p>
+
+<p>1) Static Libraries - Library code that is added to the client executable at link time.</p>
+
+<p>2) Dynamic Libraries (DLLs) - Library code that is loaded from another file at runtime.</p>
+
+<p>In this guide, I will explain both of these types, explain how we can reverse engineer the two types of libraries and how does it work.</p>
+
+<h2 id="the-empty-binary">The Empty Binary</h2>
+
+<p>Let&rsquo;s look at the simplest example. This code is an empty main() function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// SimplestExecutable.c
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() { 
+    <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}</code></pre></div>
+
+<p>This code does not depend on any function. Using visual studio we can remove the usage of the standard library (C Runtime Library) the resulting binary does not have an import table. This is the only function in the binary:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">.text:<span style="color:#ae81ff">0000000140001000</span> main            proc near
+.text:<span style="color:#ae81ff">0000000140001000</span>                 xor     eax, eax
+.text:<span style="color:#ae81ff">0000000140001002</span>                 retn
+.text:<span style="color:#ae81ff">0000000140001002</span> main            endp</code></pre></div>
+
+<p>Although this binary does not have an import table, several DLLs will be loaded:</p>
+
+<ul>
+<li>ntdll.dll: This DLL must be loaded into every process in the system. (excluding WSL processes because of Pico).</li>
+<li>kernel32.dll: This DLL is loaded automatically into every win32 subsystem process</li>
+<li>kernelbase.dll: This DLL contains some functions imported by kernel32.dll</li>
+</ul>
+
+<h2 id="the-bare-program-many-object-files">The Bare Program: Many Object Files</h2>
+
+<p>Let&rsquo;s look at another simple example. This example contains 2 object files:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// SimpleCalculator.h
+</span><span style="color:#75715e">// Header file of the SimpleCalculator functions
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">#pragma once
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">add</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">sub</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);</code></pre></div>
+
+<p>.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// SimpleCalculator.c 
+</span><span style="color:#75715e">// The implementation of the SimpleCalculator functions
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">#include</span> <span style="color:#75715e">&#34;SimpleCalculator.h&#34;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">add</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) {
+	<span style="color:#66d9ef">return</span> x <span style="color:#f92672">+</span> y;
+}
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">sub</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) {
+	<span style="color:#66d9ef">return</span> x <span style="color:#f92672">-</span> y;
+}</code></pre></div>
+
+<p>.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// SimpleCalculatorMain.c
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">#include</span> <span style="color:#75715e">&#34;SimpleCalculator.h&#34;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() {
+
+	<span style="color:#66d9ef">int</span> x <span style="color:#f92672">=</span> add(<span style="color:#ae81ff">10</span>, <span style="color:#ae81ff">20</span>);
+	<span style="color:#66d9ef">int</span> y <span style="color:#f92672">=</span> sub(<span style="color:#ae81ff">30</span>, <span style="color:#ae81ff">40</span>);
+
+	<span style="color:#66d9ef">return</span> add(x, y);
+}</code></pre></div>
+
+<p>This simple program still does not use any external function. Each C file is compiled into an object file with the code
+from the C source file. The format of an object file is COFF, PE is based on COFF - PE simply wraps COFF with the MS-DOS header, PE
+signature and &ldquo;abuses&rdquo; the optional header of COFF (_IMAGE_OPTIONAL_HEADER).</p>
+
+<p>To disassemble object files we can use the dumpbin tool or IDA pro.</p>
+
+<p>Let&rsquo;s look at the contents of the object files:</p>
+
+<p>The functions in SimpleCalculator.c are compiled into SimpleCalculator.obj as expected:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">&gt;dumpbin /disasm SimpleCalculator.obj
+
+Dump of file SimpleCalculator.obj
+
+File Type: COFF OBJECT
+
+add:
+  0000000000000000: 89 54 24 10        mov         dword ptr [rsp+10h],edx
+  0000000000000004: 89 4C 24 08        mov         dword ptr [rsp+8],ecx
+  0000000000000008: 55                 push        rbp
+  0000000000000009: 48 83 EC 40        sub         rsp,40h
+  000000000000000D: 48 8B EC           mov         rbp,rsp
+  0000000000000010: 8B 45 58           mov         eax,dword ptr [rbp+58h]
+  0000000000000013: 8B 4D 50           mov         ecx,dword ptr [rbp+50h]
+  0000000000000016: 03 C8              add         ecx,eax
+  0000000000000018: 8B C1              mov         eax,ecx
+  000000000000001A: 48 8D 65 40        lea         rsp,[rbp+40h]
+  000000000000001E: 5D                 pop         rbp
+  000000000000001F: C3                 ret
+
+sub:
+  0000000000000000: 89 54 24 10        mov         dword ptr [rsp+10h],edx
+  0000000000000004: 89 4C 24 08        mov         dword ptr [rsp+8],ecx
+  0000000000000008: 55                 push        rbp
+  0000000000000009: 48 83 EC 40        sub         rsp,40h
+  000000000000000D: 48 8B EC           mov         rbp,rsp
+  0000000000000010: 8B 45 58           mov         eax,dword ptr [rbp+58h]
+  0000000000000013: 8B 4D 50           mov         ecx,dword ptr [rbp+50h]
+  0000000000000016: 2B C8              sub         ecx,eax
+  0000000000000018: 8B C1              mov         eax,ecx
+  000000000000001A: 48 8D 65 40        lea         rsp,[rbp+40h]
+  000000000000001E: 5D                 pop         rbp
+  000000000000001F: C3                 ret</code></pre></div>
+
+<p>Let&rsquo;s look at SimpleCalculatorMain.obj:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">&gt;dumpbin /disasm SimpleCalculatorMain.obj
+
+Dump of file SimpleCalculatorMain.obj
+
+File Type: COFF OBJECT
+
+main:
+  0000000000000000: 40 55              push        rbp
+  0000000000000002: 48 83 EC 70        sub         rsp,70h
+  0000000000000006: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  000000000000000B: BA 14 00 00 00     mov         edx,14h
+  0000000000000010: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000000000015: E8 00 00 00 00     call        add ; &lt;----------
+  000000000000001A: 89 45 00           mov         dword ptr [rbp],eax
+  000000000000001D: BA 28 00 00 00     mov         edx,28h
+  0000000000000022: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000000000027: E8 00 00 00 00     call        sub ; &lt;-------------
+  000000000000002C: 89 45 04           mov         dword ptr [rbp+4],eax
+  000000000000002F: 8B 55 04           mov         edx,dword ptr [rbp+4]
+  0000000000000032: 8B 4D 00           mov         ecx,dword ptr [rbp]
+  0000000000000035: E8 00 00 00 00     call        add ; &lt;-------------
+  000000000000003A: 48 8D 65 50        lea         rsp,[rbp+50h]
+  000000000000003E: 5D                 pop         rbp
+  000000000000003F: C3                 ret</code></pre></div>
+
+<p>Ok, we can see the implementation of the main() function in this object file. As you can see - there are references to the add and sub functions.
+Sharp readers will notice something weird about these call instructions:</p>
+
+<pre><code>0000000000000015: E8 00 00 00 00     call        add
+</code></pre>
+
+<p>The &ldquo;E8&rdquo; opcode is a call instruction but the offset is 0 - The reason
+the offset is 0 is because the compiler does not know where the &ldquo;add&rdquo; function is located. This information is known only later during link time
+- the linker then replaces the zeros with the actual offsets.</p>
+
+<p>How does the linker know which bytes should be replaced?</p>
+
+<p>Each object file has a symbol table that contains imported and exported symbols.</p>
+
+<p>Let&rsquo;s examine this table inside SimpleCalculatorMain.obj:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Python" data-lang="Python"><span style="color:#f92672">&gt;</span>dumpbin <span style="color:#f92672">/</span>symbols SimpleCalculatorMain<span style="color:#f92672">.</span>obj
+
+Dump of file SimpleCalculatorMain<span style="color:#f92672">.</span>obj
+
+File Type: COFF OBJECT
+
+COFF SYMBOL TABLE
+<span style="color:#f92672">.....</span> (truncated)
+<span style="color:#f92672">.....</span>
+<span style="color:#ae81ff">00</span>E <span style="color:#ae81ff">00000000</span> UNDEF  notype ()    External     <span style="color:#f92672">|</span> add
+<span style="color:#ae81ff">00</span>F <span style="color:#ae81ff">00000000</span> UNDEF  notype ()    External     <span style="color:#f92672">|</span> sub
+<span style="color:#ae81ff">010</span> <span style="color:#ae81ff">00000000</span> SECT3  notype ()    External     <span style="color:#f92672">|</span> main
+<span style="color:#f92672">....</span>
+<span style="color:#f92672">....</span> (truncated)</code></pre></div>
+
+<p>We can see that the table contains &ldquo;add&rdquo;, &ldquo;sub&rdquo; and &ldquo;main&rdquo;. The &ldquo;main&rdquo; function is located in SECTION 3. The &ldquo;add&rdquo; and &ldquo;sub&rdquo; functions are declared as
+&ldquo;UNDEF&rdquo; - this means these symbols will be looked up in the global namespace later during linkage.</p>
+
+<p>After finding the functions in the global namespace, the linker needs to update all the references to these symbols (the calls we saw before) with the updated offsets. This is why
+the object file also contains a relocation table:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Python" data-lang="Python"><span style="color:#f92672">&gt;</span>dumpbin <span style="color:#f92672">/</span>relocations SimpleCalculatorMain<span style="color:#f92672">.</span>obj
+
+Dump of file SimpleCalculatorMain<span style="color:#f92672">.</span>obj
+
+File Type: COFF OBJECT
+
+RELOCATIONS <span style="color:#75715e">#3</span>
+                                                Symbol    Symbol
+ Offset    Type              Applied To         Index     Name
+ <span style="color:#f92672">--------</span>  <span style="color:#f92672">----------------</span>  <span style="color:#f92672">-----------------</span>  <span style="color:#f92672">--------</span>  <span style="color:#f92672">------</span>
+ <span style="color:#ae81ff">00000016</span>  REL32                      <span style="color:#ae81ff">00000000</span>         E  add
+ <span style="color:#ae81ff">0000002</span><span style="color:#ae81ff">8</span>  REL32                      <span style="color:#ae81ff">00000000</span>         F  sub
+ <span style="color:#ae81ff">00000036</span>  REL32                      <span style="color:#ae81ff">00000000</span>         E  add
+ <span style="color:#f92672">...</span>
+ <span style="color:#f92672">...</span></code></pre></div>
+
+<p>As you can see, Each reference to a symbol is added to the relocation table so the linker will be able to fix the offset to the actual location of the function.</p>
+
+<p>After the linker fixes the offsets, the main function looks like this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-None" data-lang="None">&gt;dumpbin /disasm SimpleCalculator.exe
+
+Dump of file SimpleCalculator.exe
+
+File Type: EXECUTABLE IMAGE
+
+add:
+...
+... (truncated)
+...
+sub:
+...
+... (truncated)
+...
+main:
+  0000000140001040: 40 55              push        rbp
+  0000000140001042: 48 83 EC 70        sub         rsp,70h
+  0000000140001046: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  000000014000104B: BA 14 00 00 00     mov         edx,14h
+  0000000140001050: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000140001055: E8 A6 FF FF FF     call        add ; &lt;-------
+  000000014000105A: 89 45 00           mov         dword ptr [rbp],eax
+  000000014000105D: BA 28 00 00 00     mov         edx,28h
+  0000000140001062: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000140001067: E8 B4 FF FF FF     call        sub ; &lt;-------
+  000000014000106C: 89 45 04           mov         dword ptr [rbp+4],eax
+  000000014000106F: 8B 55 04           mov         edx,dword ptr [rbp+4]
+  0000000140001072: 8B 4D 00           mov         ecx,dword ptr [rbp]
+  0000000140001075: E8 86 FF FF FF     call        add ; &lt;-------
+  000000014000107A: 48 8D 65 50        lea         rsp,[rbp+50h]
+  000000014000107E: 5D                 pop         rbp
+  000000014000107F: C3                 ret</code></pre></div>
+
+<p>As you can see, the functions look exactly the same - but the offsets are fixed.</p>
+
+<h3 id="whole-program-optimization">Whole Program Optimization</h3>
+
+<p>The &ldquo;add&rdquo; and &ldquo;sub&rdquo; functions are pretty small, why not inline them?<br>
+Inlining small functions has runtime benefits because it does not require the CPU to perform a CALL instruction. <br>
+In C and C++, A &ldquo;link time optimization&rdquo; lets the linker perform all sorts of optimizations. The issue with normal object files is that the linker does not have enough information to perform the optimizations. Optimization is typically performed on an internal compiler intermidiate representation of the program (
+think of it like the middle code between your source code and machine code) So it is not possible using normal object files because they contain machine
+code. the linker is not clever enough to modify the machine code after it was generated.</p>
+
+<p>We can achive link time optimization by using the /GL compiler flag. This flag
+instructs the compiler to generate more information and add it to the object file. This &ldquo;more information&rdquo; is highly compiler version dependent, because it typically means that the compiler will not omit machine code but the intermidiate representation code. This means the object file will not be valid with tools like dumpbin and IDA Pro anymore. This flag should only be used in case the code is compiled and linked on the same computer.</p>
+
+<p>In this case, link time optimizations can even evaluate these functions in compile time - this results in this binary:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">public main
+    main proc near
+    mov     eax, <span style="color:#ae81ff">0x14</span>
+    retn
+main endp</code></pre></div>
+
+<p>This is simply beautiful.</p>
+
+<h2 id="static-library-development">Static Library Development</h2>
+
+<p>Let&rsquo;s start by exploring the simpler type of libraries called &ldquo;static libraries&rdquo;. As we saw earlier, the linker is responsible to take
+the object files produced by the compiler and gather them into the final executable file. Each object file represents a compiled C file.
+Let&rsquo;s say I wrote a library that implements a calculator (just like SimpleCalculator from before..) and I want to give this library to my friend.
+Theoretically, if the implementation were a single file I could compile it and give my friend the object file so he could add it as a linker input. This would add the code of the library to his executable, just like the example from before. The problem is: What if it&rsquo;s more than 1 file?</p>
+
+<p>Let&rsquo;s say I have this &ldquo;library&rdquo;:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// Add.c
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">add</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) { 
+    <span style="color:#66d9ef">return</span> x <span style="color:#f92672">+</span> y;
+}</code></pre></div>
+
+<p>.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// Sub.c
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">sub</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) { 
+    <span style="color:#66d9ef">return</span> x <span style="color:#f92672">-</span> y;
+}</code></pre></div>
+
+<p>After compilation there are 2 object files: add.obj, sub.obj. I could give them to my friend, but it&rsquo;s not scalable - What if I had 100 files?</p>
+
+<p>Maybe there is a way to merge these object files into 1 file somehow..</p>
+
+<p>It turns out there is - it&rsquo;s called a static library (.LIB file in windows). Static libraries allows the developer to add a bunch of symbols to the
+linker namespace easily. This can be done by changing the Configuration Type in Visual Studio to &ldquo;Static Library&rdquo;. This will instruct the linker to
+produce a &ldquo;.LIB&rdquo; file from the object files (instead of generating an executable file)</p>
+
+<p>The .LIB file is simply an archive file of object files. The format of the archive is <a href="https://en.wikipedia.org/wiki/Ar_(Unix)">AR format</a>. In Unix, linkers can decompress AR archives and extract object files from them. In Windows the idea is similar,
+we add the LIB file as an input to the linker and it simply adds the object files from the LIB file. (In windows the format is a bit
+different though..)</p>
+
+<p>To reverse engineer LIB files, you can use &ldquo;dumpbin /disasm&rdquo; or load the binary into IDA pro. This is example output of dumpbin /disasm:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">&gt;dumpbin /disasm StaticCalculator.lib
+Microsoft (R) COFF/PE Dumper Version 14.22.27905.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file StaticCalculator.lib
+
+File Type: LIBRARY
+
+sub:
+  0000000000000000: 89 54 24 10        mov         dword ptr [rsp+10h],edx
+  0000000000000004: 89 4C 24 08        mov         dword ptr [rsp+8],ecx
+  0000000000000008: 57                 push        rdi
+  0000000000000009: 8B 44 24 18        mov         eax,dword ptr [rsp+18h]
+  000000000000000D: 8B 4C 24 10        mov         ecx,dword ptr [rsp+10h]
+  0000000000000011: 2B C8              sub         ecx,eax
+  0000000000000013: 8B C1              mov         eax,ecx
+  0000000000000015: 5F                 pop         rdi
+  0000000000000016: C3                 ret
+
+add:
+  0000000000000000: 89 54 24 10        mov         dword ptr [rsp+10h],edx
+  0000000000000004: 89 4C 24 08        mov         dword ptr [rsp+8],ecx
+  0000000000000008: 57                 push        rdi
+  0000000000000009: 8B 44 24 18        mov         eax,dword ptr [rsp+18h]
+  000000000000000D: 8B 4C 24 10        mov         ecx,dword ptr [rsp+10h]
+  0000000000000011: 03 C8              add         ecx,eax
+  0000000000000013: 8B C1              mov         eax,ecx
+  0000000000000015: 5F                 pop         rdi
+  0000000000000016: C3                 ret</code></pre></div>
+
+<p>LIB files have one more use: They can be used to add imports to the import table (&ldquo;import library&rdquo;) - we will introduce this concept after explaining about dynamic libraries later.</p>
+
+<p><em>Do not use the &ldquo;Whole Program Optimization&rdquo; with lib files unless you are compiling and linking on the same computer. If you compile something with the
+/GL flag and give the lib file to someone else with a different MSVC version undefined behavior is in your nose</em></p>
+
+<h2 id="dynamic-library-development">Dynamic Library Development</h2>
+
+<p>As we said before, Dynamic Libraries are libraries that are loaded from another file (typically the DLL file). There are couple advantages to dynamic
+libraries in contrast to static libraries:</p>
+
+<ul>
+<li>Save space in disk for shared libraries - Many executables can use the same DLL file (for example, kernel32.dll)</li>
+<li>Save space in memory for shared libraries - Utilize the Copy On Write machanism of the virtual memory manager to share physical pages if possible.</li>
+<li>Minimize load time for shared libraries - Because pages can be reused (if they are already in memory), the load time may be better than a bigger executable.</li>
+<li>Allow updating the library code without recompilation of the client executables - simply replace the DLL on disk</li>
+</ul>
+
+<p>The main disadvantages of dynamic libraries:</p>
+
+<ul>
+<li>DLL Hell - could cause &ldquo;DLL not found&rdquo; errors and compatability issues</li>
+<li>Runtime speed (in certain cases) - In static libraries, the linker handles the linking of the library. Because the code of the library is embedded inside
+the executable, the linker can optimize stuff - for example: inline functions.</li>
+</ul>
+
+<p>In windows, DLLs can be loaded in 2 ways:</p>
+
+<ul>
+<li>Import Table - The PE file format has an &ldquo;import table&rdquo;. This is a a table that contains references to dynamic libraries that will be loaded at runtime by the windows loader.</li>
+<li>Calling LoadLibrary(string path) - The LoadLibrary function can be called to load a DLL file from the file system.</li>
+</ul>
+
+<h3 id="creating-a-dynamic-library">Creating a dynamic library</h3>
+
+<p>Let&rsquo;s create a simple DLL. This DLL implements the Calculator interface (ahhh again..)</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// DynamicCalculator.c
+</span><span style="color:#75715e"></span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;Windows.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+
+BOOL APIENTRY <span style="color:#a6e22e">DllMain</span>( HMODULE hModule,
+                       DWORD  ul_reason_for_call,
+                       LPVOID lpReserved
+                     )
+{
+    <span style="color:#66d9ef">switch</span> (ul_reason_for_call)
+    {
+    <span style="color:#66d9ef">case</span> DLL_PROCESS_ATTACH:
+    <span style="color:#66d9ef">case</span> DLL_THREAD_ATTACH:
+    <span style="color:#66d9ef">case</span> DLL_THREAD_DETACH:
+    <span style="color:#66d9ef">case</span> DLL_PROCESS_DETACH:
+        <span style="color:#66d9ef">break</span>;
+    }
+    <span style="color:#66d9ef">return</span> TRUE;
+}
+
+<span style="color:#66d9ef">__declspec</span>(dllexport) <span style="color:#66d9ef">int</span> add(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) {
+	<span style="color:#66d9ef">return</span> x <span style="color:#f92672">+</span> y;
+}
+
+<span style="color:#66d9ef">__declspec</span>(dllexport) <span style="color:#66d9ef">int</span> sub(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y) {
+	<span style="color:#66d9ef">return</span> x <span style="color:#f92672">-</span> y;
+}</code></pre></div>
+
+<p>This is the simple implementation of our DLL. This DLL has a DllMain function. This function is called by the windows loader in several cases:</p>
+
+<ul>
+<li>DLL_PROCESS_ATTACH: The DLL is loaded</li>
+<li>DLL_PROCESS_DETACH: The DLL is unloaded</li>
+<li>DLL_THREAD_ATTACH: A new thread is created. The call is made in the context of the new thread</li>
+<li>DLL_THREAD_DETACH: A thread is exiting cleanly.</li>
+</ul>
+
+<p>It&rsquo;s funny, but the initialization of a DLL is not always performed inside the DllMain function. The reason is that there are many restrictions on the
+DllMain function. The easiest thing to do is to expose a &ldquo;Initialize&rdquo; function that will perform the actual initialization of the state of the DLL.</p>
+
+<p>Each DLL has an export table. The export table is a table that contains all the exported functions of the DLL. (name and location of the function.
+Functions can be exported by an &ldquo;Ordinal&rdquo; number, we won&rsquo;t talk about this)</p>
+
+<p>&ldquo;__declspec&rdquo; is a microsoft specific attribute that allows the developer so specify a &ldquo;storage class&rdquo; to declarations. &ldquo;dllexport&rdquo; is a storage class that
+exports the function in the export table of a DLL. The developer can also use a &ldquo;.def&rdquo; file to define the names of the exports, but using dllexport is
+somtimes easier.</p>
+
+<p>So, after compiling this code it will result in a DLL file that contains:</p>
+
+<ul>
+<li>C runtime library code</li>
+<li>&ldquo;add&rdquo; export</li>
+<li>&ldquo;sub&rdquo; export</li>
+</ul>
+
+<p>A DLL file is in the PE format. The only difference between an executable PE and a DLL is a simple flag. Most of the tools that can be used to explore an
+executable file can also be used to explore DLL files, including:</p>
+
+<ul>
+<li>IDA</li>
+<li>CFF Explorer</li>
+<li>pestudio</li>
+<li>dumpbin</li>
+<li>&hellip;.</li>
+</ul>
+
+<p>Let&rsquo;s see how we can use the DynamicCalculator DLL.</p>
+
+<h3 id="using-a-dll-with-loadlibrary-and-getprocaddress">Using a DLL with LoadLibrary() and GetProcAddress()</h3>
+
+<p>The win32 api provides 2 useful functions to clients of DLLs:</p>
+
+<ul>
+<li>HMODULE LoadLibrary(WSTR DllPath) - Load a specific library from the file system. (kernelbase!LoadLibraryW -&gt; kernelbase!LoadLibraryExW -&gt; ntdll!LdrLoadDll)
+Calling this function also invokes the &ldquo;DllMain&rdquo; procedure of the DLL we are loading.</li>
+<li>PVOID GetProcAddress(HMODULE ModuleHandle, STR FunctionName) - Look at the export table of a module and get the address
+of an exported function.</li>
+</ul>
+
+<p>Example Client Program (Ignoring errors for simplicity..)</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// DynamicCalculatorClient.c
+</span><span style="color:#75715e"></span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;windows.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+<span style="color:#75715e">// define pointer types
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#a6e22e">int</span> (<span style="color:#f92672">*</span>ptr_add)(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+<span style="color:#66d9ef">typedef</span> <span style="color:#a6e22e">int</span> (<span style="color:#f92672">*</span>ptr_sub)(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+
+<span style="color:#75715e">// pointers to export functions
+</span><span style="color:#75715e"></span>ptr_add add;
+ptr_sub sub;
+HMODULE dynamicCalculator;
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() {
+  <span style="color:#75715e">// Load the library
+</span><span style="color:#75715e"></span>  dynamicCalculator <span style="color:#f92672">=</span> LoadLibraryA(<span style="color:#e6db74">&#34;DynamicCalculator.dll&#34;</span>);
+  add <span style="color:#f92672">=</span> (ptr_add)GetProcAddress(dynamicCalculator, <span style="color:#e6db74">&#34;add&#34;</span>);
+  sub <span style="color:#f92672">=</span> (ptr_sub)GetProcAddress(dynamicCalculator, <span style="color:#e6db74">&#34;sub&#34;</span>);
+
+  <span style="color:#75715e">// Actual logic of the client program
+</span><span style="color:#75715e"></span>  <span style="color:#66d9ef">int</span> x <span style="color:#f92672">=</span> add(<span style="color:#ae81ff">10</span>, <span style="color:#ae81ff">20</span>);
+  <span style="color:#66d9ef">int</span> y <span style="color:#f92672">=</span> sub(<span style="color:#ae81ff">30</span>, <span style="color:#ae81ff">20</span>);
+
+  <span style="color:#66d9ef">int</span> sum <span style="color:#f92672">=</span> add(x, y);
+
+  <span style="color:#75715e">// Free the library
+</span><span style="color:#75715e"></span>  FreeLibrary(dynamicCalculator);
+
+  <span style="color:#66d9ef">return</span> sum;
+}</code></pre></div>
+
+<p>Notice that this method requires us to:</p>
+
+<ul>
+<li>Declare the prototype of the declared functions</li>
+<li>Call &ldquo;LoadLibrary&rdquo; with the name of the DLL</li>
+<li>Call GetProcAddress() with the function names we are about to use and save the function pointers in a variable (global or local)</li>
+<li>Call the functions through these pointers</li>
+</ul>
+
+<p>Let&rsquo;s look at the disassembly of our program:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-html" data-lang="html">&gt;dumpbin DynamicCalculatorClient.exe /disasm
+...
+...
+main:
+  00000001400116C0: 40 55              push        rbp
+  00000001400116C2: 57                 push        rdi
+  00000001400116C3: 48 81 EC 48 01 00  sub         rsp,148h
+                    00
+  00000001400116CA: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  00000001400116CF: 48 8B FC           mov         rdi,rsp
+  00000001400116D2: B9 52 00 00 00     mov         ecx,52h
+  00000001400116D7: B8 CC CC CC CC     mov         eax,0CCCCCCCCh
+  00000001400116DC: F3 AB              rep stos    dword ptr [rdi]
+  00000001400116DE: 48 8D 0D CB 84 00  lea         rcx,[??_C@_0BG@JAKNIHCK@DynamicCalculator?4dll@] ; &#34;DynamicCalculator.dll&#34;
+                    00
+  00000001400116E5: FF 15 25 D9 00 00  call        qword ptr [__imp_LoadLibraryA]
+  00000001400116EB: 48 89 05 D6 B1 00  mov         qword ptr [dynamicCalculator],rax
+                    00
+  00000001400116F2: 48 8D 15 D3 84 00  lea         rdx,[??_C@_03BDGOHNNK@add@] ; &#34;add&#34;
+                    00
+  00000001400116F9: 48 8B 0D C8 B1 00  mov         rcx,qword ptr [dynamicCalculator]
+                    00
+  0000000140011700: FF 15 02 D9 00 00  call        qword ptr [__imp_GetProcAddress]
+  0000000140011706: 48 89 05 DB B1 00  mov         qword ptr [add],rax
+                    00
+  000000014001170D: 48 8D 15 BC 84 00  lea         rdx,[??_C@_03KCMAIMAP@sub@] ; &#34;sub&#34;
+                    00
+  0000000140011714: 48 8B 0D AD B1 00  mov         rcx,qword ptr [dynamicCalculator]
+                    00
+  000000014001171B: FF 15 E7 D8 00 00  call        qword ptr [__imp_GetProcAddress]
+  0000000140011721: 48 89 05 B8 B1 00  mov         qword ptr [sub],rax
+                    00
+  0000000140011728: BA 14 00 00 00     mov         edx,14h
+  000000014001172D: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000140011732: FF 15 B0 B1 00 00  call        qword ptr [add]
+  0000000140011738: 89 45 04           mov         dword ptr [rbp+4],eax
+  000000014001173B: BA 14 00 00 00     mov         edx,14h
+  0000000140011740: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000140011745: FF 15 95 B1 00 00  call        qword ptr [sub]
+  000000014001174B: 89 45 24           mov         dword ptr [rbp+24h],eax
+  000000014001174E: 8B 55 24           mov         edx,dword ptr [rbp+24h]
+  0000000140011751: 8B 4D 04           mov         ecx,dword ptr [rbp+4]
+  0000000140011754: FF 15 8E B1 00 00  call        qword ptr [add]
+  000000014001175A: 89 45 44           mov         dword ptr [rbp+44h],eax
+  000000014001175D: 48 8B 0D 64 B1 00  mov         rcx,qword ptr [dynamicCalculator]
+                    00
+  0000000140011764: FF 15 96 D8 00 00  call        qword ptr [__imp_FreeLibrary]
+  000000014001176A: 8B 45 44           mov         eax,dword ptr [rbp+44h]
+  000000014001176D: 48 8D A5 28 01 00  lea         rsp,[rbp+128h]
+                    00
+  0000000140011774: 5F                 pop         rdi
+  0000000140011775: 5D                 pop         rbp
+  0000000140011776: C3                 ret
+  ...
+  ...</code></pre></div>
+
+<p>As you can see in this code, the calls to functions from other DLLs are made through pointers:</p>
+
+<p><code>0000000140011732: FF 15 B0 B1 00 00  call        qword ptr [add]</code></p>
+
+<p>This makes sense because the compiler (and even the linker) cannot know the address of the &ldquo;add&rdquo; function (it is loaded in runtime) -
+That&rsquo;s why calls to DLL functions have to be made using pointers. The opcode &ldquo;FF 15 <32bit offset>&rdquo;
+means: Load the value from *(RIP+offset) then perform a &ldquo;call&rdquo; instruction to this address.</p>
+
+<h3 id="using-the-import-table-to-load-dlls">Using the import table to load DLLs</h3>
+
+<p>All this work with LoadLibrary() and GetProcAddress() can be very annoying to maintain for real systems. This is why the PE format header has a structure called the
+import table. The import table can be used to instruct the windows loader to load certain DLLs. For each DLL, there&rsquo;s a list of names (or ordinals) of functions that
+need to be imported. After the windows loader loads these DLLs, it enumerates the list of imported functions and saves the function pointers in a global location
+(actually patches the import table with the function pointers). The linker knows the offset of the import table from the beginning of the image in memory (the RVA) so
+it can fix the offset of call instructions to the imported function pointers.</p>
+
+<p>So, how can we add new imports to the import table?</p>
+
+<p>If you compile the DynamicCalculator project (the Dynamic Library we have created before) you will see that it creates the DynamicCalculator.dll file (as expected) BUT
+then you will see another file called DynamicCalculator.lib - this may look pretty weird because we created a dynamic library (not a static library).</p>
+
+<p>The DynamicCalculator.lib file is an &ldquo;import library&rdquo;.
+This .LIB file does not contain any object file (You can decompress and look) - It simply allows developers to reference imported functions as linker symbols and
+get the linker resolve the addresses conveniently. After adding the DynamicCalculator.lib file as a linker input, A developer can write the following code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// DynamicCalculatorClientImportTable.c
+</span><span style="color:#75715e"></span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;windows.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">__declspec</span>(dllimport) <span style="color:#66d9ef">int</span> add(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+<span style="color:#66d9ef">__declspec</span>(dllimport) <span style="color:#66d9ef">int</span> sub(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() {
+	<span style="color:#66d9ef">int</span> x <span style="color:#f92672">=</span> add(<span style="color:#ae81ff">10</span>, <span style="color:#ae81ff">20</span>);
+	<span style="color:#66d9ef">int</span> y <span style="color:#f92672">=</span> sub(<span style="color:#ae81ff">30</span>, <span style="color:#ae81ff">20</span>);
+
+	<span style="color:#66d9ef">int</span> sum <span style="color:#f92672">=</span> add(x, y);
+
+	<span style="color:#66d9ef">return</span> sum;
+}</code></pre></div>
+
+<p>Looking at the import table of the generated executable, we see the following:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">&gt;dumpbin /imports DynamicCalculatorClientImportTable.exe
+
+Dump of file DynamicCalculatorClientImportTable.exe
+
+File Type: EXECUTABLE IMAGE
+
+  Section contains the following imports:
+
+    DynamicCalculator.dll
+             140016000 Import Address Table
+             140016090 Import Name Table
+                     0 time date stamp
+                     0 Index of first forwarder reference
+
+                           1 sub
+                           0 add</code></pre></div>
+
+<p>This means the only DLL that is imported is DynamicCalculator.dll and the imported functions are &ldquo;sub&rdquo; and &ldquo;add&rdquo;.
+This is the generated assembly code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">main:
+  0000000140011030: 40 55              push        rbp
+  0000000140011032: 48 83 EC 70        sub         rsp,70h
+  0000000140011036: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  000000014001103B: BA 14 00 00 00     mov         edx,14h
+  0000000140011040: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000140011045: FF 15 BD 4F 00 00  call        qword ptr [__imp_add] ; &lt;-----
+  000000014001104B: 89 45 00           mov         dword ptr [rbp],eax
+  000000014001104E: BA 14 00 00 00     mov         edx,14h
+  0000000140011053: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000140011058: FF 15 A2 4F 00 00  call        qword ptr [__imp_sub] ; &lt;----
+  000000014001105E: 89 45 04           mov         dword ptr [rbp+4],eax
+  0000000140011061: 8B 55 04           mov         edx,dword ptr [rbp+4]
+  0000000140011064: 8B 4D 00           mov         ecx,dword ptr [rbp]
+  0000000140011067: FF 15 9B 4F 00 00  call        qword ptr [__imp_add] ; &lt;----
+  000000014001106D: 89 45 08           mov         dword ptr [rbp+8],eax
+  0000000140011070: 8B 45 08           mov         eax,dword ptr [rbp+8]
+  0000000140011073: 48 8D 65 50        lea         rsp,[rbp+50h]
+  0000000140011077: 5D                 pop         rbp
+  0000000140011078: C3                 ret</code></pre></div>
+
+<p>As you can see calls are made through pointers:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Asm" data-lang="Asm"><span style="color:#a6e22e">call</span>        <span style="color:#66d9ef">qword</span> <span style="color:#66d9ef">ptr</span> [<span style="color:#66d9ef">__imp_add</span>]</code></pre></div>
+
+<p>&ldquo;__imp_add&rdquo; is a linker symbol that refers to the function pointer in the import table. When the windows loader loads the DLL, it
+stores the function pointer in the import table.</p>
+
+<p>This is equivalent to using GetProcAddress() and storing the address in a global variable, then using the global variable as a function
+pointer.</p>
+
+<p><em>The windows loader does not use LoadLibrary() function directly, it uses a lower level function to perform the load. Eventually both arrive to ntdll!NtMapViewOfSection with the SEC_IMAGE flag. I will probably explain this sometime..</em></p>
+
+<h4 id="what-does-declspec-dllimport-do">What does __declspec(dllimport) do?</h4>
+
+<p>To call the &lsquo;add&rsquo; / &lsquo;sub&rsquo; function, the call has to be made through a pointer that resides in the import table. Let&rsquo;s see what I mean:</p>
+
+<p>Say I declare the add / sub functions this way:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">// DynamicCalculatorClientStub.c
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">add</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">sub</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() {
+	<span style="color:#66d9ef">int</span> x <span style="color:#f92672">=</span> add(<span style="color:#ae81ff">10</span>, <span style="color:#ae81ff">20</span>);
+	<span style="color:#66d9ef">int</span> y <span style="color:#f92672">=</span> sub(<span style="color:#ae81ff">30</span>, <span style="color:#ae81ff">20</span>);
+
+	<span style="color:#66d9ef">int</span> sum <span style="color:#f92672">=</span> add(x, y);
+
+	<span style="color:#66d9ef">return</span> sum;
+}</code></pre></div>
+
+<p>My object file will look like this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-None" data-lang="None">&gt;dumpbin /disasm DynamicCalculatorClientStub.obj
+Microsoft (R) COFF/PE Dumper Version 14.22.27905.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file DynamicCalculatorClientStub.obj
+
+File Type: COFF OBJECT
+
+main:
+  0000000000000000: 40 55              push        rbp
+  0000000000000002: 48 83 EC 70        sub         rsp,70h
+  0000000000000006: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  000000000000000B: BA 14 00 00 00     mov         edx,14h
+  0000000000000010: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000000000015: E8 00 00 00 00     call        add ; &lt;-----
+  000000000000001A: 89 45 00           mov         dword ptr [rbp],eax
+  000000000000001D: BA 14 00 00 00     mov         edx,14h
+  0000000000000022: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000000000027: E8 00 00 00 00     call        sub ; &lt;-----
+  000000000000002C: 89 45 04           mov         dword ptr [rbp+4],eax
+  000000000000002F: 8B 55 04           mov         edx,dword ptr [rbp+4]
+  0000000000000032: 8B 4D 00           mov         ecx,dword ptr [rbp]
+  0000000000000035: E8 00 00 00 00     call        add ; &lt;-----
+  000000000000003A: 89 45 08           mov         dword ptr [rbp+8],eax
+  000000000000003D: 8B 45 08           mov         eax,dword ptr [rbp+8]
+  0000000000000040: 48 8D 65 50        lea         rsp,[rbp+50h]
+  0000000000000044: 5D                 pop         rbp
+  0000000000000045: C3                 ret
+  </code></pre></div>
+
+<p>As you can see the calls are made with the E8 opcode, which as we said before, expects an offset to the function. The linker cannot
+know the offset to the actual function because it is known only in runtime. The linker does know the offset to the import table
+which contains a pointer to the imported function in runtime, but it cannot change the opcode of the instruction from a relative call
+to an indirect call because typically the length of the opcodes are different, you can see here:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-None" data-lang="None">E8 00 00 00 00     call        add                   ; 5 bytes
+FF 15 00 00 00 00  call        qword ptr [__imp_add] ; 6 bytes</code></pre></div>
+
+<p>Oh man what a mess. The linker cannot move all other instructions and fix that much stuff by itself..</p>
+
+<p>Delaring a function with &ldquo;__declspec(dllimport)&rdquo; instructs the compiler to generate the second option - calling through a function
+pointer.</p>
+
+<p>BUT typically in real libraries we want to share the header files with the clients of the library. As a reminder, our header file looks
+like this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">#pragma once
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">add</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">sub</span>(<span style="color:#66d9ef">int</span> x, <span style="color:#66d9ef">int</span> y);</code></pre></div>
+
+<p>This means the declarations won&rsquo;t have any __declspec(dllimport) in the client&rsquo;s code. So, how can the linker deal with this situation?</p>
+
+<p>Stubs! Let&rsquo;s see what happens after the linkage of the last example:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-None" data-lang="None">&gt;dumpbin /disasm DynamicCalculatorClientStub.exe
+Microsoft (R) COFF/PE Dumper Version 14.22.27905.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file DynamicCalculatorClientStub.exe
+
+File Type: EXECUTABLE IMAGE
+
+main:
+  0000000140001000: 40 55              push        rbp
+  0000000140001002: 48 83 EC 70        sub         rsp,70h
+  0000000140001006: 48 8D 6C 24 20     lea         rbp,[rsp+20h]
+  000000014000100B: BA 14 00 00 00     mov         edx,14h
+  0000000140001010: B9 0A 00 00 00     mov         ecx,0Ah
+  0000000140001015: E8 2C 00 00 00     call        add ; &lt;----- A call to the stub below
+  000000014000101A: 89 45 00           mov         dword ptr [rbp],eax
+  000000014000101D: BA 14 00 00 00     mov         edx,14h
+  0000000140001022: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000140001027: E8 20 00 00 00     call        sub ; &lt;----- A call to the stub below
+  000000014000102C: 89 45 04           mov         dword ptr [rbp+4],eax
+  000000014000102F: 8B 55 04           mov         edx,dword ptr [rbp+4]
+  0000000140001032: 8B 4D 00           mov         ecx,dword ptr [rbp]
+  0000000140001035: E8 0C 00 00 00     call        add ; &lt;----- A call to the stub below
+  000000014000103A: 89 45 08           mov         dword ptr [rbp+8],eax
+  000000014000103D: 8B 45 08           mov         eax,dword ptr [rbp+8]
+  0000000140001040: 48 8D 65 50        lea         rsp,[rbp+50h]
+  0000000140001044: 5D                 pop         rbp
+  0000000140001045: C3                 ret
+add:
+  0000000140001046: FF 25 BC 0F 00 00  jmp         qword ptr [__imp_add] ; the stub for add
+sub:
+  000000014000104C: FF 25 AE 0F 00 00  jmp         qword ptr [__imp_sub] ; the stub for sub</code></pre></div>
+
+<p>So the DynamicCalculator.lib import library contains the following symbols:</p>
+
+<ul>
+<li>__imp_add / __imp_sub: Pointers in the import table that point to the actual library code in runtime.</li>
+<li>add/sub: Stubs that contains &ldquo;jmp&rdquo; instructions to the import table pointers. If a client does not use __declspec(dllimport) the relative offset of the opcode will be resolved to these functions.</li>
+</ul>
+
+<p>One of the main advantages of not using __declspec(dllimport) is we can replace the dynamic library to a static library without
+changing our code! (even without changing the object file actually)</p>
+
+<h4 id="revisiting-the-whole-program-optimization">Revisiting the whole program optimization</h4>
+
+<p>Remember the whole program optimization? It is a link time optimization. If we turn on the whole program optimization the call
+to the stub can be converted to a call to the import table, here:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-None" data-lang="None">&gt;dumpbin /disasm DynamicCalculatorClientStub.exe
+Microsoft (R) COFF/PE Dumper Version 14.22.27905.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file DynamicCalculatorClientStub.exe
+
+File Type: EXECUTABLE IMAGE
+
+add:
+  0000000140001000: FF 25 02 10 00 00  jmp         qword ptr [__imp_add]
+sub:
+  0000000140001006: FF 25 F4 0F 00 00  jmp         qword ptr [__imp_sub]
+  000000014000100C: CC CC CC CC                                      ÌÌÌÌ
+main:
+  0000000140001010: 48 83 EC 38        sub         rsp,38h
+  0000000140001014: BA 14 00 00 00     mov         edx,14h
+  0000000140001019: B9 0A 00 00 00     mov         ecx,0Ah
+  000000014000101E: FF 15 E4 0F 00 00  call        qword ptr [__imp_add]
+  0000000140001024: 89 44 24 24        mov         dword ptr [rsp+24h],eax
+  0000000140001028: BA 14 00 00 00     mov         edx,14h
+  000000014000102D: B9 1E 00 00 00     mov         ecx,1Eh
+  0000000140001032: FF 15 C8 0F 00 00  call        qword ptr [__imp_sub]
+  0000000140001038: 89 44 24 20        mov         dword ptr [rsp+20h],eax
+  000000014000103C: 8B 54 24 20        mov         edx,dword ptr [rsp+20h]
+  0000000140001040: 8B 4C 24 24        mov         ecx,dword ptr [rsp+24h]
+  0000000140001044: FF 15 BE 0F 00 00  call        qword ptr [__imp_add]
+  000000014000104A: 89 44 24 28        mov         dword ptr [rsp+28h],eax
+  000000014000104E: 8B 44 24 28        mov         eax,dword ptr [rsp+28h]
+  0000000140001052: 48 83 C4 38        add         rsp,38h
+  0000000140001056: C3                 ret</code></pre></div>
+
+<p>That&rsquo;s it! I hope you learned about the compilation model in windows libraries. If you have any questions or found a mistake in the
+article, Send me a twitter message: <a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+<h2 id="references">References</h2>
+
+<ul>
+<li><a href="https://docs.microsoft.com/en-us/archive/msdn-magazine/2002/may/under-the-hood-link-time-code-generation">https://docs.microsoft.com/en-us/archive/msdn-magazine/2002/may/under-the-hood-link-time-code-generation</a></li>
+<li><a href="https://devblogs.microsoft.com/oldnewthing/20060721-06/?p=30433">https://devblogs.microsoft.com/oldnewthing/20060721-06/?p=30433</a></li>
+<li><a href="https://devblogs.microsoft.com/oldnewthing/20060724-00/?p=30403">https://devblogs.microsoft.com/oldnewthing/20060724-00/?p=30403</a></li>
+</ul>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

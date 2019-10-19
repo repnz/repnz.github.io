@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>APC Series: User APC API &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>APC Series: User APC API</h1>
+  <time datetime=2020-05-17T03:00:00&#43;0300 class="post-date">Sun, May 17, 2020</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#introduction-to-apc">Introduction to APC</a></li>
+<li><a href="#alertable-state">Alertable State</a></li>
+<li><a href="#apc-for-injection">APC for injection</a></li>
+<li><a href="#exploring-the-api">Exploring the API</a>
+<ul>
+<li><a href="#ntqueueapcthread-system-call-layer">NtQueueApcThread: System Call Layer</a></li>
+<li><a href="#queueuserapc-kernelbase-dll-layer">QueueUserAPC: KernelBase.dll Layer</a></li>
+<li><a href="#ntqueueapcthreadex-reusing-kernel-memory">NtQueueApcThreadEx: Reusing Kernel Memory</a></li>
+<li><a href="#ntqueueapcthreadex-meet-special-user-apc">NtQueueApcThreadEx: Meet Special User APC</a></li>
+<li><a href="#ntqueueapcthreadex2-some-new-friends-in-the-fast-ring">NtQueueApcThreadEx2: Some new friends in the fast ring</a></li>
+</ul></li>
+<li><a href="#nttestalert">NtTestAlert</a></li>
+<li><a href="#summary">Summary</a>
+<ul>
+<li><a href="#side-note">Side-Note</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<p>Hey! Long time no see.</p>
+
+<p>Coronavirus makes it harder for me to write posts, I hope I&rsquo;ll have the time to write - I have a lot I want to share!</p>
+
+<p>One of the things I did in the last few weeks is to explore the APC mechanism in Windows and I wanted to share some of my findings.
+The purpose of this series is to allow you to get a systematic understanding of APC internals.</p>
+
+<p>First, I reconstructed the source code of all of the kernel/user functions related to APC in the latest insider build, hoping to get a better understanding of the APC
+mechanism. (Without using a decompiler, just for fun)</p>
+
+<p>I&rsquo;ll share the sources in the end of the series.</p>
+
+<p>In the APC series we&rsquo;ll talk about the following topics:</p>
+
+<ul>
+<li>APC usage in User Mode</li>
+<li>APC usage in Kernel Mode</li>
+<li>Internals of User APCs</li>
+<li>Internals of Kernel APCs</li>
+<li>&ldquo;Alerts&rdquo; and how they are related to APC.</li>
+<li>How APCs work on wow64</li>
+<li>How to mess with Microsoft&rsquo;s Threat Intelligence APC ETW events, both in kernel mode and in user mode.</li>
+<li>How to unload a driver which uses APCs safely (well, kind of)</li>
+<li>How tools like procmon and process hacker utilize APCs.</li>
+<li>How CET (CPU shadow stack for ROP detection) influenced APC.</li>
+<li>Documented source code of the APC mechanism for the curious people.</li>
+<li>Solutions for &ldquo;Practical Reverse Engineering&rdquo; exercises about APC.</li>
+<li>Surprises I leave for future posts.</li>
+</ul>
+
+<p>The first post is about User Mode APCs - This is the simplest part of the series, just to get you started;)</p>
+
+<p>Don&rsquo;t worry, I&rsquo;ll share all the annotated source soon, including kernel routines, step by step.</p>
+
+<p><em>Most of this post was written based on reverse engineering and debugging so it might not be accurate, I tried to test and verify every &lsquo;fact&rsquo; I wrote in this post, but if you found any mistake please contact me and I&rsquo;ll fix it :)</em></p>
+
+<h2 id="introduction-to-apc">Introduction to APC</h2>
+
+<p>APC (Asynchronous Procedure Call) is a mechanism that can be used in Windows to queue a job to be done in the context of a specific thread. This is useful for several things - mainly for asynchronous callbacks - security people know about APC mainly because it&rsquo;s used by Malware to inject code into a different process - but this is
+just an abuse of this mechanism.</p>
+
+<p>In kernel mode, people typically should not mess with APCs because the API is undocumented, but security people (including both
+rootkits and AV developers) use it to inject their code into user mode processes from a kernel driver.</p>
+
+<p>Each thread has 2 queues: One for user mode APCs and the other for kernel mode APCs.</p>
+
+<p><em>I really discourage the use of APCs from kernel mode if you&rsquo;re not absolutely sure what you&rsquo;re doing and even if you&rsquo;re a super expert nothing prevents Microsoft from breaking your code, that&rsquo;s true for every undocumented code. However, I think using APCs in certain ways can be relatively safe, if you know what you&rsquo;re doing. We&rsquo;ll discuss kernel APCs in future posts in the series.</em></p>
+
+<p>For example, When you call an asynchronous RPC method, you can specify the address of an APC routine that will execute when the RPC method completes.
+This is just one example, there are many examples of mechanisms that use APC like NtWriteFile/NtReadFile, IO completion in IRPs, Get/SetThreadContext, SuspendThread,
+TerminateThread and much more. Also, the scheduler of windows uses APCs too. That&rsquo;s why I think understanding APCs is important for understanding windows internals - although
+this is an undocumented feature that people in Microsoft say that &ldquo;developers should not care about&rdquo;.</p>
+
+<p>There are 2 types of User Mode APCs:</p>
+
+<ol>
+<li>User APC: Normal type of User APCs, Runs only when the thread is alertable (or in specific situations we&rsquo;ll see soon)</li>
+<li>Special User APC: A relatively new type of APCs that was added in RS5. (undocumented by MS yet)</li>
+</ol>
+
+<p>Just so you get the idea, This is the main API used to queue APCs:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">DWORD <span style="color:#a6e22e">QueueUserAPC</span>(
+  PAPCFUNC  pfnAPC,
+  HANDLE    hThread,
+  ULONG_PTR dwData
+);</code></pre></div>
+
+<h2 id="alertable-state">Alertable State</h2>
+
+<p>One of the main issues (for malware) with user APC is: the caller thread has to be in an alertable state to receive this call. A thread becomes &ldquo;Alertable&rdquo; if it calls the
+&ldquo;wait&rdquo; routines - <a href="https://docs.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobjectex">WaitForSingleObjectEx</a>, <a href="https://docs.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleepex">SleepEx</a>, etc with Alertable = TRUE. When doing this, Windows may deliver APCs to this thread before returning from these
+functions. This allows the developer of the program to control in which parts of the program a user APC can be delivered. Another function that can be used to allow pending APCs to execute is NtTestAlert, which we&rsquo;re going to explore in a future post.</p>
+
+<p>Microsoft did not want to &ldquo;force&rdquo; a user mode thread to execute an APC. I think (only theory) the main reason is because it may expose this thread to
+subtle race conditions and deadlocks. Imagine you write a program that has a list that is guarded by a certain lock. In your program, You use async RPC with an APC
+completion routine. Then, right after the thread acquires the lock, while performing an operation on a list, an APC is forced to run in this thread. Then, the code of the APC tries to acquire the lock and boom deadlock - or worse, the thread will touch the list although the lock is acquired and the code is already inside the critical section. If you deliver APCs only when the thread enters alertable state it can improve this situation by making it less likely to happen
+ (depending on how the developer wrote his code)
+but it does not prevent it.</p>
+
+<p>Acquiring locks inside an APC is probably a bad idea anyway, but in the kernel microsoft has partially solved this issue - you can prevent APCs to a
+thread that acquires a certain lock by raising IRQL to APC_LEVEL or disabling APCs via KeEnterCriticalRegion / KeEnterGuardedRegion - sometimes it&rsquo;s required by
+certain APIs like ExAcquireResourceSharedLite for example. I&rsquo;ll talk about it when I&rsquo;ll explore APC in kernel mode in a future post.</p>
+
+<p>Moreover, It&rsquo;s important to note that while user mode APCs are indeed <a href="https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-queueuserapc">documented</a>, Microsoft has some recommendations:</p>
+
+<ul>
+<li>Do not enter alertable state inside an APC - There&rsquo;s nothing preventing an APC from interrupting another user APC if the thread is alertable, so it may cause a stack overflow.</li>
+<li>Microsoft recommends not to queue an APC to a different process, mainly because potential differences between addresses to functions between processes because of relocations and wow64.</li>
+</ul>
+
+<p>I neither agree nor disagree with these recommendations, But when using a certain feature of the OS it&rsquo;s important to understand it deeply and know how it was meant to be used.</p>
+
+<h2 id="apc-for-injection">APC for injection</h2>
+
+<p>Anyway, back to business - Running APCs only when the thread approves it means that if you want to use APCs for injection (from user mode) you have to find an alertable thread or hope the thread will enter an alertable
+state soon. But, In RS5 Microsoft implemented an interesting mechanism: Special User APCs. This mechanism allows the caller to &ldquo;force&rdquo; an APC into a particular thread even if it&rsquo;s
+not currently alertable, by queueing a Kernel APC that will signal the thread&rsquo;s execution. This kernel APC re-queues a user APC to the same thread. I&rsquo;ll explore the internals of this mechanism in a future post.</p>
+
+<p>Let&rsquo;s talk now about the basic differences between these APCs from an API perspective. Let&rsquo;s say I have 2 processes: &ldquo;Safe&rdquo; and &ldquo;Malicious&rdquo; process, the &ldquo;Malicious&rdquo; process wants to inject code into the &ldquo;Safe&rdquo; process using APC. Let&rsquo;s say, the &ldquo;Safe&rdquo; process has only one thread which executes the following lines of code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>() { 
+    <span style="color:#66d9ef">while</span> (<span style="color:#ae81ff">1</span>) { Sleep(<span style="color:#ae81ff">500</span>); }
+    <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}</code></pre></div>
+
+<p>Looks simple, right?</p>
+
+<p>If the injector uses a normal user APC to queue the APC - it will never execute! This is not really surprising because this thread does not enter alertable state.
+The APC is placed in the queue and never get executed. When the thread is terminated, this user APC is freed.</p>
+
+<p>The Special User APC is a mechanism that was added in RS5 (and exposed through NtQueueApcThreadEx), but lately (in an insider build) was exposed through a new
+syscall - NtQueueApcThreadEx2. If this type of APC is used, the thread is signaled in the middle of the execution to execute the special APC.</p>
+
+<p>As an attacker, this may sound
+tempting - but, this is actually pretty dangerous - For example, imagine a thread is in the middle of loading a library (because LoadLibrary was called.) and a special user APC
+was queued to this thread. As you may know, LoadLibrary touches the loader structures in the PEB and also acquires some locks. Let&rsquo;s say the target address of the APC
+is LoadLibrary, because the attacker wanted to load his DLL to the remote process. This can cause problems because the same thread is already inside LoadLibrary - This is
+exactly why Microsoft did not want to allow an APC to run if the thread is not in an alertable state - now the thread is stuck because of a deadlock or the data structures are
+in an undefined state. This issue sounds rare - but it&rsquo;s actually very dangerous, because LoadLibrary() is not the only function that uses locks. Nevertheless, Special User
+APCs can be very powerful and useful for attackers.</p>
+
+<p>Generally, if you want to do things right, it&rsquo;s pretty hard to use APC for user mode injection unless you know a bit about the target thread..</p>
+
+<h2 id="exploring-the-api">Exploring the API</h2>
+
+<p>Let&rsquo;s start from the bottom up. the kernel exposes 3 system calls to queue APCs: NtQueueApcThread, NtQueueApcThreadEx and NtQueueApcThreadEx2. QueueUserAPC is a wrapper function
+in kernelbase that calls NtQueueApcThread. Let&rsquo;s look.</p>
+
+<h3 id="ntqueueapcthread-system-call-layer">NtQueueApcThread: System Call Layer</h3>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the signature of the first system call that can queue APCs. 
+</span><span style="color:#75715e">// This function is undocumented.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// It receives 5 arguments:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// ThreadHandle - a HANDLE to the target thread. This HANDLE must have THREAD_SET_CONTEXT access. 
+</span><span style="color:#75715e">//                This thread can be in a different process, though Microsoft do not recommend developers to
+</span><span style="color:#75715e">///                queue an APC to a different process.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// ApcRoutine - This is the address of the target routine in the context of the target process. 
+</span><span style="color:#75715e">//              The parameters of this function can be controlled by NtQueueApcThread.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// SystemArgument1-3 - The first 3 arguments of the ApcRoutine.  
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">NtQueueApcThread</span>(  
+    IN HANDLE ThreadHandle,
+    IN PPS_APC_ROUTINE ApcRoutine,
+    IN PVOID SystemArgument1 OPTIONAL,
+    IN PVOID SystemArgument2 OPTIONAL,
+    IN PVOID SystemArgument3 OPTIONAL
+    );
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This function is the signature of APC functions at the native layer. 
+</span><span style="color:#75715e">// It allows to pass 3 parameters. Moreover, in x64 there&#39;s a hidden parameter 
+</span><span style="color:#75715e">// that is passed to the APC function, the ContextRecord,
+</span><span style="color:#75715e">// which is a pointer to the context of the thread before the execution of the APC. 
+</span><span style="color:#75715e">// I&#39;m not sure if this parameter exists in 32 bit..
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// Also, something cool about the x64 calling convention - because the caller allocates / frees
+</span><span style="color:#75715e">// the parameters, we can call functions with less than 4 parameters like LoadLibrary() which receives only 1 parameter.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> 
+<span style="color:#a6e22e">VOID</span> 
+(<span style="color:#f92672">*</span>PPS_APC_ROUTINE)(
+    PVOID SystemArgument1,
+    PVOID SystemArgument2,
+    PVOID SystemArgument3,
+    PCONTEXT ContextRecord
+);</code></pre></div>
+
+<p>This API is very simple and easy to use. Let&rsquo;s see an example usage: <em>removed error handling for simplicity</em></p>
+
+<p><em>Of course I don&rsquo;t recommend to use it in such way in real products. If you&rsquo;re a real developer, read the intro.</em></p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">VOID 
+<span style="color:#a6e22e">QueueLoadLibrary</span>(
+    ULONG ProcessId,
+    PSTR LibraryName
+    )
+{
+    PVOID RemoteLibraryAddress;
+    HANDLE ProcessHandle;
+    HANDLE ThreadHandle;
+    NTSTATUS Status;
+    
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Open the process with the required access to allocate and write the library name.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    ProcessHandle <span style="color:#f92672">=</span> OpenProcess(
+                        PROCESS_QUERY_INFORMATION <span style="color:#f92672">|</span>
+                        PROCESS_VM_OPERATION <span style="color:#f92672">|</span>
+                        PROCESS_VM_WRITE,
+                        FALSE,
+                        ProcessId
+                    );
+
+	RemoteLibraryAddress <span style="color:#f92672">=</span> WriteLibraryNameToRemote(ProcessHandle, LibraryName);
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Get a handle to the first thread in the process.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    NtGetNextThread(
+        ProcessHandle,
+        NULL,
+        THREAD_SET_CONTEXT,
+        <span style="color:#ae81ff">0</span>,
+        <span style="color:#ae81ff">0</span>,
+        <span style="color:#f92672">&amp;</span>ThreadHandle
+    );
+
+    NtQueueApcThread(
+        ThreadHandle,
+        GetProcAddress(GetModuleHandle(<span style="color:#e6db74">&#34;kernel32&#34;</span>), <span style="color:#e6db74">&#34;LoadLibraryA&#34;</span>),
+        RemoteLibraryAddress,
+        NULL,
+        NULL
+    );
+}</code></pre></div>
+
+<p>Well, this usage is pretty simple, read comments to understand. Note that the signature of LoadLibraryA() is not PPS_APC_ROUTINE, but it&rsquo;s fine because it&rsquo;s x64.</p>
+
+<h3 id="queueuserapc-kernelbase-dll-layer">QueueUserAPC: KernelBase.dll Layer</h3>
+
+<p>Well, Microsoft likes to create wrappers for system calls - so they&rsquo;ll be able to change the implementation of stuff etc. Microsoft also likes COM and additional DLL loading and
+redirection  mechanisms. The combination of both created the following function: QueueUserAPC.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the wrapper function implemented in kernelbase.dll to queue APCs. This function is documented.
+</span><span style="color:#75715e">// This function has 3 arguments:
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// pfnAPC - the pointer to the apc routine in the target process context. 
+</span><span style="color:#75715e">//          Note that the signature of this function is different from the signature in NtQueueApcThread.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// hThread - the handle to the target thread. Requires THREAD_SET_CONTEXT.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// dwData - the context argument passed to pfnAPC - This is the only argument passed to pfnAPC.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>DWORD 
+<span style="color:#a6e22e">QueueUserAPC</span>(
+    PAPCFUNC pfnAPC,
+    HANDLE hThread,
+    ULONG_PTR dwData
+    );
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the signature of the APC Routine if QueueUserAPC is used. 
+</span><span style="color:#75715e">// The only parameter here is the dwData argument from QueueUserAPC.
+</span><span style="color:#75715e">// You may ask why the signature is different than the signature of PPS_APC_ROUTINE, we&#39;ll see below why.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span>
+<span style="color:#a6e22e">VOID</span>
+(NTAPI <span style="color:#f92672">*</span>PAPCFUNC)(
+    IN ULONG_PTR Parameter
+    );
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the reverse engineered implementation of QueueUserAPC in windows 10 
+</span><span style="color:#75715e">// (In was changed a bit in the latest insider, you&#39;ll see below)
+</span><span style="color:#75715e">// 
+</span><span style="color:#75715e">// This function captures the activation context of the current thread 
+</span><span style="color:#75715e">// and saves it, so it can be inherited by the APC routine.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// Activation Contexts are data structures that save configuration for DLL redirection, SxS and COM.
+</span><span style="color:#75715e">// To read more about activation context: https://docs.microsoft.com/en-us/windows/win32/sbscs/activation-contexts.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>DWORD 
+<span style="color:#a6e22e">QueueUserAPC</span>(
+    PAPCFUNC pfnAPC,
+    HANDLE hThread,
+    ULONG_PTR dwData
+    )
+{
+    ACTIVATION_CONTEXT_BASIC_INFORMATION Info;
+    NTSTATUS Status;
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Capture the activation context of the current thread.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    Status <span style="color:#f92672">=</span> RtlQueryInformationActivationContext(
+            <span style="color:#ae81ff">1</span>,
+            NULL,
+            NULL,
+            ActivationContextBasicInformation,
+            <span style="color:#f92672">&amp;</span>Info,
+            <span style="color:#66d9ef">sizeof</span>(Info),
+            NULL
+        );
+
+    <span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)) {
+        DbgPrint(<span style="color:#e6db74">&#34;SXS: %s failing because RtlQueryInformationActivationContext() returned status %08lx&#34;</span>, 
+                            <span style="color:#e6db74">&#34;QueueUserAPC&#34;</span>, Status);
+        BaseSetLastNTError(Status);
+        <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+    }
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Forward the call to the actual system call.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// The ApcRoutine that is used is actually a wrapper function in ntdll, called &#34;RtlDispatchApc&#34;
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// The purpose of this wrapper function is to use the activation context passed as a parameter.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    Status <span style="color:#f92672">=</span> NtQueueApcThread(
+            hThread,        <span style="color:#75715e">// ThreadHandle
+</span><span style="color:#75715e"></span>            RtlDispatchAPC, <span style="color:#75715e">// ApcRoutine
+</span><span style="color:#75715e"></span>            (PPS_APC_ROUTINE)pfnAPC, <span style="color:#75715e">// SystemArgument1
+</span><span style="color:#75715e"></span>            (PVOID)dwData, <span style="color:#75715e">// SystemArgument2
+</span><span style="color:#75715e"></span>            Info.hActCtx <span style="color:#75715e">// SystemArgument3
+</span><span style="color:#75715e"></span>        );
+
+    <span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)) {
+        BaseSetLastNTError(Status);
+        <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+    }
+
+    <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">1</span>;
+}
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is used as SystemArgument3 if QueueUserAPC
+</span><span style="color:#75715e">// was used to queue the APC.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">union</span> _APC_ACTIVATION_CTX { 
+    ULONG_PTR Value;
+    HANDLE hActCtx;
+} APC_ACTIVATION_CTX;
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the actual APC routine.
+</span><span style="color:#75715e">// It enables the activation context, calls the user provided routine, and deactivates the context.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>VOID
+<span style="color:#a6e22e">RtlDispatchAPC</span>( <span style="color:#75715e">// ntdll
+</span><span style="color:#75715e"></span>    PAPCFUNC pfnAPC,
+    ULONG_PTR dwData,
+    APC_ACTIVATION_CTX ApcActivationContext
+    )
+{
+    RTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED StackFrame;
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Initialize the StackFrame data structure.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    StackFrame.Size <span style="color:#f92672">=</span> <span style="color:#66d9ef">sizeof</span>(RTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED);
+    StackFrame.Format <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>;
+    StackFrame.Extra1 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+    StackFrame.Extra2 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+    StackFrame.Extra3 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+    StackFrame.Extra4 <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+    
+    <span style="color:#66d9ef">if</span> (ApcActivationContext.Value <span style="color:#f92672">==</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>) { 
+        pfnAPC(dwData);
+        <span style="color:#66d9ef">return</span>;
+    }
+    
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Use the activation context of the queuing thread.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    RtlActivateActivationContextUnsafeFast(<span style="color:#f92672">&amp;</span>StackFrame, ApcActivationContext.hActCtx);
+    
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Call the user provided routine.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    pfnAPC(dwData);
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Pop the activation context from the &#34;activation context stack&#34;
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    RtlDeactivateActivationContextUnsafeFast(<span style="color:#f92672">&amp;</span>StackFrame);
+    
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Free the handle to the activation context.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    RtlReleaseActivationContext(ApcActivationContext.hActCtx);
+}</code></pre></div>
+
+<p>As you can see above, the user provided APC routine of APCs queued using QueueUserAPC is stored in SystemArgument1. This is something important to note for those of you who deal
+with hooking or monitoring stuff.</p>
+
+<h3 id="ntqueueapcthreadex-reusing-kernel-memory">NtQueueApcThreadEx: Reusing Kernel Memory</h3>
+
+<p>Each time NtQueueApcThread is called, a new KAPC object is allocated in kernel mode (from the kernel pool) to store the data about the APC object. Let&rsquo;s say there&rsquo;s a component that
+queues a lot of APCs, one after another. This can have performance implications because a lot of non-paged memory is used and also allocating memory takes some time..</p>
+
+<p>In windows 7, Microsoft added a very simple object to kernel mode called the memory reserve object. It allows to reserve memory for certain objects in kernel mode and later
+when the object is freed use the same memory area to store another objects, thus recuding the number of ExAllocatePool/ExFreePool calls. NtQueueApcThreadEx receives a HANDLE to such object, thus allowing
+the caller to reuse the same memory.</p>
+
+<p>This is the interface for creating a &ldquo;Memory Reserve Handle&rdquo;:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// The memory reserve object currently supports allocating 2 types of objects:
+</span><span style="color:#75715e">// - User APC
+</span><span style="color:#75715e">// - Io Completion
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">enum</span> _MEMORY_RESERVE_OBJECT_TYPE {
+     MemoryReserveObjectTypeUserApc,
+     MemoryReserveObjectTypeIoCompletion
+ } MEMORY_RESERVE_OBJECT_TYPE, PMEMORY_RESERVE_OBJECT_TYPE;
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// The system call to allocate a memory reserve object.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">NtAllocateReserveObject</span>(
+    __out PHANDLE MemoryReserveHandle,
+    __in_opt POBJECT_ATTRIBUTES ObjectAttributes,
+    __in MEMORY_RESERVE_OBJECT_TYPE ObjectType
+    );
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is the new system call that was added in Windows 7.
+</span><span style="color:#75715e">// This system call is the same as NtQueueApcThread, but allows to specify a MemoryReserveHandle.
+</span><span style="color:#75715e">// This is a handle to an object allocated using NtAllocateReserveObject.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// If the memory is currently in use (for example, the APC object was not freed yet) you can not reuse the memory.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">NtQueueApcThreadEx</span>(  
+    IN HANDLE ThreadHandle,
+    IN HANDLE MemoryReserveHandle,
+    IN PPS_APC_ROUTINE ApcRoutine,
+    IN PVOID SystemArgument1 OPTIONAL,
+    IN PVOID SystemArgument2 OPTIONAL,
+    IN PVOID SystemArgument3 OPTIONAL
+    );</code></pre></div>
+
+<p>Using this new object, we can save the overhead of the allocation of KAPC objects, example code below:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>(
+	<span style="color:#66d9ef">int</span> argc,
+	<span style="color:#66d9ef">const</span> <span style="color:#66d9ef">char</span><span style="color:#f92672">**</span> argv
+	)
+{
+	NTSTATUS Status;
+	HANDLE MemoryReserveHandle;
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Create the memory reserve handle. This will allocate space for a KAPC object in kernel mode.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	Status <span style="color:#f92672">=</span> NtAllocateReserveObject(<span style="color:#f92672">&amp;</span>MemoryReserveHandle, NULL, MemoryReserveObjectTypeUserApc);
+
+	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)) {
+		printf(<span style="color:#e6db74">&#34;NtAllocateReserveObject Failed! 0x%08X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, Status);
+		<span style="color:#66d9ef">return</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>;
+	}
+
+	<span style="color:#66d9ef">while</span> (TRUE) {
+		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// Queue the APC to the current thread.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Reuse the memory allocated using NtAllocateReserveObject.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		Status <span style="color:#f92672">=</span> NtQueueApcThreadEx(
+					GetCurrentThread(),
+					MemoryReserveHandle,
+					ExampleApcRoutine,
+					NULL,
+					NULL,
+					NULL
+				);
+
+		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)) {
+			printf(<span style="color:#e6db74">&#34;NtQueueApcThreadEx Failed! 0x%08X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, Status);
+			<span style="color:#66d9ef">return</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>;
+		}
+
+		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// Enter alertable state to execute the APC.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		SleepEx(<span style="color:#ae81ff">0</span>, TRUE);
+	}
+
+	<span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}
+
+VOID
+<span style="color:#a6e22e">ExampleApcRoutine</span>(
+	PVOID SystemArgument1,
+	PVOID SystemArgument2,
+	PVOID SystemArgument3
+)
+{
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This sleep is not alertable.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	Sleep(<span style="color:#ae81ff">500</span>); 
+
+	printf(<span style="color:#e6db74">&#34;This is the weird loop!</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+}</code></pre></div>
+
+<p>This mechanism is used by RPC servers to reuse APC objects of completion routines. If you&rsquo;re curious, you can look in rpcrt4!CALL::QueueAPC</p>
+
+<h3 id="ntqueueapcthreadex-meet-special-user-apc">NtQueueApcThreadEx: Meet Special User APC</h3>
+
+<p>In RS5, Microsoft implemented the Special User APC. I did not find any usage of this functionality in my windows machine. As I said above, the Special User APC can
+be used to force a thread to execute an APC routine, even if it&rsquo;s not in an alertable state.</p>
+
+<p>When RS5 was released, Microsoft did not want to add another system call (yet) so they changed NtQueueApcThreadEx to support special user APCs by
+turning the MemoryReserveHandle into a union:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// This is a new &#34;Flags&#34; enum they added. 
+</span><span style="color:#75715e">// The only supported flag is QueueUserApcFlagsSpecialUserApc.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">enum</span> _QUEUE_USER_APC_FLAGS {
+	QueueUserApcFlagsNone,
+	QueueUserApcFlagsSpecialUserApc,
+	QueueUserApcFlagsMaxValue
+} QUEUE_USER_APC_FLAGS;
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is a union that is used instead of the MemoryReserveHandle argument.
+</span><span style="color:#75715e">// This is backwards compatible to old usage of the system call.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">union</span> _USER_APC_OPTION {
+	ULONG_PTR UserApcFlags;
+	HANDLE MemoryReserveHandle;
+} USER_APC_OPTION, <span style="color:#f92672">*</span>PUSER_APC_OPTION;
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Same as before, but MemoryReserveHandle was replaced by UserApcOption.
+</span><span style="color:#75715e">// This allows the caller to use one of the options.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>NTSTATUS
+<span style="color:#a6e22e">NtQueueApcThreadEx</span>(
+	IN HANDLE ThreadHandle,
+	IN USER_APC_OPTION UserApcOption,
+	IN PPS_APC_ROUTINE ApcRoutine,
+	IN PVOID SystemArgument1 OPTIONAL,
+	IN PVOID SystemArgument2 OPTIONAL,
+	IN PVOID SystemArgument3 OPTIONAL
+	);</code></pre></div>
+
+<p>This is an example usage of Special User APC:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>(
+	<span style="color:#66d9ef">int</span> argc,
+	<span style="color:#66d9ef">const</span> <span style="color:#66d9ef">char</span><span style="color:#f92672">**</span> argv
+	)
+{
+	PNT_QUEUE_APC_THREAD_EX NtQueueApcThreadEx;
+	USER_APC_OPTION UserApcOption;
+	NTSTATUS Status;
+
+	NtQueueApcThreadEx <span style="color:#f92672">=</span> (PNT_QUEUE_APC_THREAD_EX)(GetProcAddress(GetModuleHandle(<span style="color:#e6db74">&#34;ntdll.dll&#34;</span>), <span style="color:#e6db74">&#34;NtQueueApcThreadEx&#34;</span>));
+	
+	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NtQueueApcThreadEx) {
+		printf(<span style="color:#e6db74">&#34;wtf, before win7</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+		<span style="color:#66d9ef">return</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>;
+	}
+
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This is a special flag that tells NtQueueApcThreadEx this APC is a special user APC.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	UserApcOption.UserApcFlags <span style="color:#f92672">=</span> QueueUserApcFlagsSpecialUserApc;
+
+	<span style="color:#66d9ef">while</span> (TRUE) {
+		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// This will force the current thread to execute the special user APC,
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// Although the current thread does not enter alertable state.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// The APC will execute before the thread returns from kernel mode.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		Status <span style="color:#f92672">=</span> NtQueueApcThreadEx(
+					GetCurrentThread(),
+					UserApcOption,
+					ApcRoutine,
+					NULL,
+					NULL,
+					NULL
+				);
+
+		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>NT_SUCCESS(Status)) {
+			printf(<span style="color:#e6db74">&#34;NtQueueApcThreadEx Failed! 0x%08X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, Status);
+			<span style="color:#66d9ef">return</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>;
+		}
+
+		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// This sleep does not enter alertable state.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>		Sleep(<span style="color:#ae81ff">500</span>);
+	}
+
+    <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}
+
+VOID
+<span style="color:#a6e22e">ApcRoutine</span>(
+	PVOID SystemArgument1,
+	PVOID SystemArgument2,
+	PVOID SystemArgument3
+	)
+{
+	printf(<span style="color:#e6db74">&#34;yo wtf?? I was not alertable!</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+}</code></pre></div>
+
+<p>Note that special user APCs can also interrupt the execution of a different thread, this will be explored in future posts.</p>
+
+<h3 id="ntqueueapcthreadex2-some-new-friends-in-the-fast-ring">NtQueueApcThreadEx2: Some new friends in the fast ring</h3>
+
+<p>Somewhere around windows insider build 19603, two important functions were added:</p>
+
+<ol>
+<li>NtQueueApcThreadEx2: This is a new system call, that allows to pass both UserApcFlags and MemoryReserveHandle. (Well, it won&rsquo;t work becasue some validation checks you don&rsquo;t use both lol.)</li>
+<li>QueueUserAPC2: This is a new wrapper function in kernelbase.dll, that allows the user to access the special user APC.</li>
+</ol>
+
+<p>The new wrapper function may show Microsoft&rsquo;s intention to document QueueUserAPC2 and allow clients to use it. Well, it can be utilized to signal a thread in the middle of
+execution, something that can be pretty useful - for example to emulate signaling mechanisms similar to how Linux can signal threads <a href="http://man7.org/linux/man-pages/man3/pthread_cancel.3.html">(pthread_cancel)</a>.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">NTSTATUS
+<span style="color:#a6e22e">NtQueueApcThreadEx2</span>(
+    IN HANDLE ThreadHandle,
+    IN HANDLE UserApcReserveHandle,
+    IN QUEUE_USER_APC_FLAGS QueueUserApcFlags,
+    IN PPS_APC_ROUTINE ApcRoutine,
+    IN PVOID SystemArgument1 OPTIONAL,
+    IN PVOID SystemArgument2 OPTIONAL,
+    IN PVOID SystemArgument3 OPTIONAL
+    );
+
+
+DWORD
+<span style="color:#a6e22e">QueueUserApc2</span>(
+    PAPCFUNC pfnAPC,
+    HANDLE hThread,
+    ULONG_PTR dwData,
+    QUEUE_USER_APC_FLAGS Flags
+    );</code></pre></div>
+
+<h2 id="nttestalert">NtTestAlert</h2>
+
+<p>NtTestAlert is a system call that&rsquo;s related to the alerts mechanism of Windows. This system call can cause execution of any pending APCs the thread has (well, if the thread is not alerted. Don&rsquo;t confuse an &ldquo;alerted&rdquo; thread with an &ldquo;alertable&rdquo; thread) We&rsquo;ll explore the internals of this mechanism in a future post, but it&rsquo;s important to note that
+before a thread starts executing it&rsquo;s Win32 start address (Inside ntdll!_LdrpInitialize) it calls NtTestAlert to execute any pending APCs. Let&rsquo;s see how we can abuse this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">int</span>
+<span style="color:#a6e22e">main</span>(
+	<span style="color:#66d9ef">int</span> argc,
+	<span style="color:#66d9ef">const</span> <span style="color:#66d9ef">char</span><span style="color:#f92672">**</span> argv
+)
+{
+	
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Create the thread as a suspended thread.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// NtTestAlert is called at the beginning of the lifetime of the new thread,
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// before &#39;NewThread&#39; is executed.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Because we want this NtTestAlert call to cause the thread to execute the APC,
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// we need to queue the APC before this NtTestAlert call is called.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This is why we create the thread in a suspended state, then queue the APC, then
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// resume the thread.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This technique can be used with remote threads as well and often used with CreateProcess(CREATE_SUSPENDED).
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	HANDLE ThreadHandle <span style="color:#f92672">=</span> CreateThread(
+								NULL,
+								<span style="color:#ae81ff">0</span>,
+								NewThread,
+								NULL,
+								CREATE_SUSPENDED,
+								NULL
+							);
+		
+	
+	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>QueueUserAPC(
+		ApcRoutine,
+		ThreadHandle,
+		<span style="color:#ae81ff">0</span>
+	)) {
+		printf(<span style="color:#e6db74">&#34;Error queueing APC</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+	}	
+
+	printf(<span style="color:#e6db74">&#34;APC Queued. Calling ResumeThread..</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+
+	ResumeThread(ThreadHandle);
+
+	WaitForSingleObject(ThreadHandle, INFINITE);
+
+	<span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}
+
+VOID
+<span style="color:#a6e22e">ApcRoutine</span>(
+	ULONG_PTR dwData
+)
+{
+	printf(<span style="color:#e6db74">&#34;Inside the ApcRoutine.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+}
+
+
+DWORD
+<span style="color:#a6e22e">NewThread</span>(
+	PVOID ThreadArgument
+	)
+{
+	printf(<span style="color:#e6db74">&#34;Inside the thread.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+	<span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}</code></pre></div>
+
+<p>The output is:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Bash" data-lang="Bash">APC Queued. Calling ResumeThread..
+Inside the ApcRoutine.
+Inside the thread.</code></pre></div>
+
+<p>By the way, this NtTestAlert call is what allows AVs and rootkits to execute their user APCs when the thread begins - we&rsquo;ll see examples in a future post.</p>
+
+<h2 id="summary">Summary</h2>
+
+<p>In the next blog-posts, we&rsquo;ll continue exploring the internals of APCs. I hope I&rsquo;ll have time to write the new post this week..
+This is the repo I use to store all the code that is related to this series: <a href="https://github.com/repnz/apc-research">apc-research</a></p>
+
+<p>EDIT: The next blog post is here: <a href="/posts/apc/kernel-user-apc-api">User APC Internals</a></p>
+
+<h3 id="side-note">Side-Note</h3>
+
+<p>You may ask, what got me into exploring APCs?</p>
+
+<p>Well, I&rsquo;m always excited about exploring and reverse engineering mechanisms of Windows. After seeing a tweet about the addition of special user APCs, I got super excited. The last time APC internals were documented was long time ago, I think this series can be helpful for people that want to explore windows internals.
+Stay tuned! This is just the beginning!!</p>
+
+<p><a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

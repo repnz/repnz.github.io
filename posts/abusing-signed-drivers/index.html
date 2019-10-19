@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Abusing Signed Windows Drivers &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Abusing Signed Windows Drivers</h1>
+  <time datetime=2019-11-13T01:23:57&#43;0200 class="post-date">Wed, Nov 13, 2019</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#the-problem">The Problem</a></li>
+<li><a href="#windivert">WinDivert</a></li>
+<li><a href="#process-hacker">Process Hacker</a></li>
+<li><a href="#prevent-this">Prevent this?</a></li>
+<li><a href="#summary">Summary</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<h2 id="the-problem">The Problem</h2>
+
+<p>We all know the &ldquo;Driver Signature Enforcement&rdquo; feature in windows. This security feature won&rsquo;t allow you to load unsigned drivers
+into the windows kernel. To bypass this protection, many attackers use vulnerable signed drivers like
+<a href="https://github.com/hfiref0x/TDL">turla</a>. They try to find vulnerabilities in these drivers and exploit them. What people don&rsquo;t think about
+is the fact that it&rsquo;s way simpler than finding an exploitable memory corruption bug in a software driver - sometimes the driver just exposes the functionality
+via DeviceIoControl and this can be used to perform malicious operations in kernel mode.
+the <a href="/posts/autochk-rootkit-analysis">Autochk Rootkit</a> is one example (note that it&rsquo;s not signed by MS), but there are many examples.
+(This problem is well known, still interesting to talk about)</p>
+
+<p>This problem is not really a security problem or something, it&rsquo;s just a weird corner case that can be abused to do fun stuff in kernel mode without loading your own driver.</p>
+
+<h2 id="windivert">WinDivert</h2>
+
+<p>The <a href="https://www.reqrypt.org/windivert.html">WinDivert</a> library allows developers from user mode to &ldquo;<em>capture/modify/drop network packets sent to/from the Windows network stack</em>&rdquo;.
+It works by installing a driver and this driver exposes an interface to do all these operations from user mode.</p>
+
+<p>The <a href="https://blog.talosintelligence.com/2019/09/divergent-analysis.html?m=1">Divergent</a> payload loads this driver and uses this mechanism to block AVs from
+getting updates. This is really easy because the interface to the driver is documented and wrapped for your use.</p>
+
+<h2 id="process-hacker">Process Hacker</h2>
+
+<p>Another example of such a driver is the process hacker driver. This driver exposes an <a href="https://github.com/processhacker/processhacker/blob/master/KProcessHacker/devctrl.c">IOCTL interface</a> that looks very promising.</p>
+
+<p>Process hacker can be used to open a handle to a process from kernel mode or call ZwTerminateProcess. Another cool functionality is: Process hacker has an IOCTL for
+reading the memory of other processes. This can be abused to read the memory of processes like lsass.exe to dump credentials.
+This of course, can be used to bypass protections like NtReadVirtualMemory hooks and the threat intelligence ETW&hellip;</p>
+
+<p>Just take an interesting product that has a driver and try to hack with it - I&rsquo;m sure you start collecting them (like me;))</p>
+
+<h2 id="prevent-this">Prevent this?</h2>
+
+<p>I thought about it: Is there anything driver developers can do to prevent this abuse?</p>
+
+<p>Well, a naive developer would check that the process that communicates with the driver is signed by the company. The thing is,
+malware developers can easily inject code into a signed process - this will bypass this check.</p>
+
+<p>I thought there&rsquo;s no solution to this, But then I had this idea:</p>
+
+<ul>
+<li>Do not allow dynamic code to be executed from the caller process (using the new windows 10 mitigation policy)</li>
+<li>When a request comes to your driver, check that the process does not contain injected code. (by checking that the process
+contains only MEM_IMAGE executable sections) and that the process contains only a list of known images.</li>
+<li>Existing images may be patched: hash executable sections to check if they were patched.</li>
+</ul>
+
+<p>Sounds perfect right? - (Ignoring many other ways to inject code into a process) The attacker cannot inject code into our signed process,
+so he won&rsquo;t be able to call the DeviceIoControl!</p>
+
+<p>Think about it for a second..</p>
+
+<p>Ahhh.. The attacker can do many things to bypass this protection:</p>
+
+<ul>
+<li>Use WriteProcessMemory to write the DeviceIoControl parameters into the address space of the target process,
+then use SetThreadContext() to call to DeviceIoControl. The attacker can even fake it so it looks like the actual user mode process called
+DeviceIoControl (by faking call stacks, we control RSP)</li>
+<li>Use WriteProcessMemory() to prepare a ROP chain on the stack of the user mode process. Use SetThreadContext to execute the ROP chain will call
+DeviceIoControl with the expected values.</li>
+</ul>
+
+<p>Wait, what about using ObRegisterCallbacks and limiting process handle access to <em>PROCESS_QUERY_LIMITED_INFORMATION</em>?</p>
+
+<p>Don&rsquo;t be so happy, remember the attacker can utilize the power of any other signed kernel driver;</p>
+
+<p>The problem is: trying to protect code that runs at the same level as you can be very hard, sometimes impossible - it&rsquo;s just like playing a cat and mouse game.</p>
+
+<p>If you have suggestions for other things that can prevent this abuse I will be happy to hear! 😊</p>
+
+<h2 id="summary">Summary</h2>
+
+<p>Just give up, as long as you&rsquo;re admin, windows is broken dudes.</p>
+
+<p>The main takeaway of this article is that attackers can abuse the functionality of any signed driver as long as the attacker can control this functionality from user mode.</p>
+
+<p>If you find any problem in the article I will be happy to hear, hope you enjoyed!:)</p>
+
+<p><a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+<p>Read More:</p>
+
+<ul>
+<li><a href="https://j00ru.vexillium.org/2010/06/insight-into-the-driver-signature-enforcement/">https://j00ru.vexillium.org/2010/06/insight-into-the-driver-signature-enforcement/</a></li>
+<li><a href="https://j00ru.vexillium.org/2012/11/defeating-windows-driver-signature-enforcement-part-1-default-drivers/">https://j00ru.vexillium.org/2012/11/defeating-windows-driver-signature-enforcement-part-1-default-drivers/</a></li>
+</ul>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>

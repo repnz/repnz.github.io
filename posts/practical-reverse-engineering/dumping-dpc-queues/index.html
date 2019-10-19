@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us" lang="en-us">
+<head>
+  <link href="https://gmpg.org/xfn/11" rel="profile">
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="Hugo 0.58.3" />
+
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Dumping DPC Queues: Adventures in HIGH_LEVEL IRQL &middot; Low Level Pleasure</title>
+  <meta name="description" content="" />
+
+  
+  <link type="text/css" rel="stylesheet" href="/css/print.css" media="print">
+  <link type="text/css" rel="stylesheet" href="/css/poole.css">
+  <link type="text/css" rel="stylesheet" href="/css/syntax.css">
+  <link type="text/css" rel="stylesheet" href="/css/hyde.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700">
+
+
+  
+  <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144-precomposed.png">
+  <link rel="shortcut icon" href="/favicon.png">
+
+  
+  
+</head>
+
+  <body class=" ">
+  <aside class="sidebar">
+  <div class="container">
+    <div class="sidebar-about">
+      <a href="/"><h1>Low Level Pleasure</h1></a>
+      <p class="lead">
+       Ori Damari&#39;s (repnz) blog about Windows Internals, Reversing, Malware, Software Development 
+      </p>
+    </div>
+    <nav>
+      <ul class="sidebar-nav">
+        <li><a href="https://repnz.github.io">Home</a> </li>
+        <li><a href="/about" > About Me </a></li><li><a href="/posts" > Archive </a></li><li><a href="/tags" > Tags </a></li><li><a href="https://github.com/repnz/"  target="_blank" > Github (/repnz) </a></li><li><a href="https://twitter.com/0xrepnz"  target="_blank" > Twitter (0xrepnz) </a></li>
+      </ul>
+    </nav>
+    <p>&copy; 2020. All rights reserved. </p>
+  </div>
+</aside>
+
+    <main class="content container">
+    <div class="post">
+  <h1>Dumping DPC Queues: Adventures in HIGH_LEVEL IRQL</h1>
+  <time datetime=2020-01-18T01:30:37&#43;0200 class="post-date">Sat, Jan 18, 2020</time>
+  <nav id="TableOfContents">
+<ul>
+<li>
+<ul>
+<li><a href="#using-undocumented-apis-in-windows">Using Undocumented APIs in Windows</a></li>
+<li><a href="#finding-the-dpc-queue">Finding the DPC queue</a></li>
+<li><a href="#safe-signatures">Safe (?) Signatures</a></li>
+<li><a href="#synchronization-issues">Synchronization Issues</a>
+<ul>
+<li><a href="#synchronization-at-passive-level">Synchronization at PASSIVE_LEVEL</a></li>
+<li><a href="#what-s-irql">What&rsquo;s IRQL?</a></li>
+<li><a href="#synchronization-at-dispatch-level">Synchronization at DISPATCH_LEVEL</a></li>
+<li><a href="#synchronizing-with-dpc-functions">Synchronizing with DPC functions</a></li>
+<li><a href="#recursive-spin-lock-issue">Recursive spin lock issue</a></li>
+</ul></li>
+<li><a href="#implementation">Implementation</a></li>
+<li><a href="#summary">Summary</a></li>
+</ul></li>
+</ul>
+</nav>
+  
+
+<p>This post is part of the <a href="/posts/practical-reverse-engineering/solutions"><em>Practical Reverse Engineering Exercises</em></a> series.</p>
+
+<p>To understand more about the basics of DPCs, read <a href="/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc"><em>Reversing KeInsertQueueDpc</em></a></p>
+
+<p>(Source code below.)</p>
+
+<p><em>Exercise: Write a driver to enumerate all DPCs on the entire system. Make sure you support multi-processor systems! Explain the difficulties and how you solved them.</em></p>
+
+<p>Sounds fun! let&rsquo;s start. <em>I thought about dividing this post to 2 posts, but nah</em></p>
+
+<h2 id="using-undocumented-apis-in-windows">Using Undocumented APIs in Windows</h2>
+
+<p>First of all, we need to understand that accessing the DPC queue from a real product is an extremely bad idea
+because it&rsquo;s a pretty undocumented data structure. Although the usage of DPC is documented, the internals are not. Doing stuff like
+this in a real product is a good way to cause blue screens to your clients. For example, the DPC queue data structure was changed
+between windows 7 and 10. If you wrote code that used the old structure, your code won&rsquo;t work or will cause BSODs. The thing is, sometimes it is
+needed to do undocumented stuff in the kernel, so it&rsquo;s useful to know how to do it reliably. Altough sometimes undocumented stuff can
+be done reliably, this is very hard and requires years of experience in the windows kernel - honestly I don&rsquo;t have the confidence to say
+that my solution is reliable but I do know I tried my best to not cause BSODs. So for the sake of the exercise it&rsquo;s fine but.. yeah.</p>
+
+<h2 id="finding-the-dpc-queue">Finding the DPC queue</h2>
+
+<p>To solve this exercise, we need to understand where DPCs are saved. As we saw in the last <a href="/posts/practical-reverse-engineering/reversing-dpc-keinsertqueuedpc">solution</a> each CPU has a structure
+called the PRCB that contains much per-processor information. The PRCB contains the DpcData - this is a structure that describes the
+queue of DPCs.</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">struct</span> _KPRCB {
+	...
+	...
+	...
+	<span style="color:#66d9ef">struct</span> _KDPC_DATA DpcData[<span style="color:#ae81ff">2</span>];
+	...
+	...
+}</code></pre></div>
+
+<p>This structure looks like this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// This is Prcb.DpcData in &lt; 8.1
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KDPC_DATA_1 {
+	LIST_ENTRY DpcListHead; <span style="color:#75715e">// Practically pointer to the ListHead and LastEntry..
+</span><span style="color:#75715e"></span>	KSPIN_LOCK DpcLock;
+	LONG DpcQueueDepth;
+	ULONG DpcCount;
+} KDPC_DATA_1, <span style="color:#f92672">*</span> PKDPC_DATA_1;
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This structure only exists in &gt;= 8.1.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KDPC_LIST {
+	SINGLE_LIST_ENTRY ListHead;
+	PSINGLE_LIST_ENTRY LastEntry;
+} KDPC_LIST, <span style="color:#f92672">*</span> PKDPC_LIST;
+
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// This is Prcb.DpcData in &gt;= 8.1
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KDPC_DATA_2 {
+	KDPC_LIST DpcList;
+	KSPIN_LOCK DpcLock;
+	LONG DpcQueueDepth;
+	ULONG DpcCount;
+	PKDPC ActiveDpc;
+} KDPC_DATA_2, <span style="color:#f92672">*</span> PKDPC_DATA_2;</code></pre></div>
+
+<p>As you can see it was changed in windows 8.1 so we&rsquo;ll have to be careful with that in our code. In the practical reverse engineering book,
+the structure was defined like the older one.</p>
+
+<p>Ok so we need to find it in runtime. How can we do it?</p>
+
+<p>The first thing that comes in mind is - look at the KDPC structure:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//0x40 bytes (sizeof)
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">struct</span> _KDPC
+{
+    UCHAR Type;                                   <span style="color:#75715e">//0x0
+</span><span style="color:#75715e"></span>    UCHAR Importance;                             <span style="color:#75715e">//0x1
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">volatile</span> USHORT Number;                       <span style="color:#75715e">//0x2
+</span><span style="color:#75715e"></span>    SINGLE_LIST_ENTRY DpcListEntry;               <span style="color:#75715e">//0x8
+</span><span style="color:#75715e"></span>    ULONGLONG ProcessorHistory;                   <span style="color:#75715e">//0x10
+</span><span style="color:#75715e"></span>    PKDEFERRED_PROCEDURE DeferredRoutine;         <span style="color:#75715e">//0x18
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> DeferredContext;                        <span style="color:#75715e">//0x20
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> SystemArgument1;                        <span style="color:#75715e">//0x28
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> SystemArgument2;                        <span style="color:#75715e">//0x30
+</span><span style="color:#75715e"></span>    PVOID DpcData;                                <span style="color:#75715e">//0x38
+</span><span style="color:#75715e"></span>}; </code></pre></div>
+
+<p>We can see DpcData over there - yay! Actually if you read the book, you see the following sentence:</p>
+
+<p><em>&ldquo;DpcData—A pointer to a KDPC_DATA structure:&rdquo;</em></p>
+
+<p>Ok this sounds promising! Let&rsquo;s queue a DPC object and then look at the DpcData member and that way we can find KDPC_DATA. There&rsquo;s only
+one problem with this logic - it does not work - let&rsquo;s see why. When we look at the value of DpcData we can see it&rsquo;s initialized inside
+KiInsertQueueDpc:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rcx, [rbp+2D90h] ; KPRCB.IsrDpcStats
+cmovnz  rcx, rax
+xor     eax, eax
+lock cmpxchg [rdi+_KDPC.DpcData], rcx</code></pre></div>
+
+<p>So - the thing is: The DpcData pointer does not point to KDPC_DATA anymore! It was like this before the change but now it points to another
+ structure containing statistics about interrupts. Heh..</p>
+
+<p>So we need to find another way to locate DpcData..</p>
+
+<p>If you look at the PRCB structure, you&rsquo;ll see this:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KPRCB {
+    ...........
+    ...........
+    ...........
+    <span style="color:#66d9ef">union</span> _SLIST_HEADER InterruptObjectPool;                                <span style="color:#75715e">//0x2dc0
+</span><span style="color:#75715e"></span>    ULONGLONG PrcbPad41[<span style="color:#ae81ff">6</span>];                                                 <span style="color:#75715e">//0x2dd0
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">struct</span> _KDPC_DATA DpcData[<span style="color:#ae81ff">2</span>];                                           <span style="color:#75715e">//0x2e00
+</span><span style="color:#75715e"></span>    VOID<span style="color:#f92672">*</span> DpcStack;                                                         <span style="color:#75715e">//0x2e50
+</span><span style="color:#75715e"></span>    LONG MaximumDpcQueueDepth;                                              <span style="color:#75715e">//0x2e58
+</span><span style="color:#75715e"></span>    ...........
+    ...........
+    ...........
+} KPRCB, <span style="color:#f92672">*</span>PKPRCB;</code></pre></div>
+
+<p>Ok, do you have any ideas?</p>
+
+<p>When a DPC is scheduled to run (When it does not run under the idle thread) the value of DpcStack is used to initialize the stack of the
+DPC. AHA! We can do the following:</p>
+
+<ul>
+<li>Schedule a DPC and then save the value of RSP at the DpcRoutine.</li>
+<li>Use this value and find DpcStack in the PRCB.</li>
+<li>Look right above the DpcStack and find DpcData</li>
+</ul>
+
+<p>This is pretty hacky but it could work, Let&rsquo;s think about another implementation. As we can see the KDPC_DATA is embedded inside the
+KPRCB structure. If you look at the KDPC_DATA structure, you&rsquo;ll see it has 2 pointers:</p>
+
+<ul>
+<li>Pointer to the top item in the queue</li>
+<li>Pointer to the last entry in the queue</li>
+</ul>
+
+<p>The next idea is to basically insert items to the queue by ourselves and then search for a pointer to our items inside the KPRCB. I
+implemented the scan with the Rsp value in my solution, Although it&rsquo;s probably better to do it using the second method because it&rsquo;s more
+reliable.</p>
+
+<h2 id="safe-signatures">Safe (?) Signatures</h2>
+
+<p>Ok.. so let&rsquo;s say we implement the idea from above</p>
+
+<ul>
+<li>How can we know the address we got is the right one?</li>
+<li>How can we know the structure was not changed and the offsets are the same?</li>
+</ul>
+
+<p>Doing shady stuff in kernel mode can easily cause blue screens, let&rsquo;s understand why. Eventually we&rsquo;ll need to dereference pointers
+to do useful work - let&rsquo;s say we think we found the address of the DPC queue and we want to use it. We may naively think
+about using &ldquo;__try&rdquo; to prevent access violation exceptions in case we get a bad address:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// DpcData may be invalid... 
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>PKDPC_DATA DpcData <span style="color:#f92672">=</span> FindDpcData(); 
+....
+....
+<span style="color:#75715e">// 
+</span><span style="color:#75715e">// Go over the DPC queue and copy the DPC information into the output buffer
+</span><span style="color:#75715e">// **** BAD CODE: USING __try IS DUMB HERE. *****
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">__try</span> {
+    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Dereference DpcData to get the list head
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>    PKDPC CurrentDpc <span style="color:#f92672">=</span> CONTAINING_RECORD(DpcData<span style="color:#f92672">-&gt;</span>ListHead.Next, KDPC, DpcListEntry);
+
+    <span style="color:#66d9ef">for</span> (LONG i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> DpcData<span style="color:#f92672">-&gt;</span>DpcQueueDepth; i<span style="color:#f92672">++</span>) {
+        RtlCopyMemory(<span style="color:#f92672">&amp;</span>DpcObjectsCopy[i], CurrentDpc, <span style="color:#66d9ef">sizeof</span>(KDPC));
+
+        <span style="color:#66d9ef">if</span> (CurrentDpc<span style="color:#f92672">-&gt;</span>DpcListEntry.Next <span style="color:#f92672">==</span> NULL) {
+            <span style="color:#66d9ef">break</span>;
+        }
+
+        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// Dereference CurrentDpc to get the next entry
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">//
+</span><span style="color:#75715e"></span>        CurrentDpc <span style="color:#f92672">=</span> CONTAINING_RECORD((CurrentDpc<span style="color:#f92672">-&gt;</span>DpcListEntry.Next), KDPC, DpcListEntry);
+    }
+
+    <span style="color:#66d9ef">return</span> TRUE;
+}
+<span style="color:#66d9ef">__except</span>(EXCEPTION_EXECUTE_HANDLER) { 
+    <span style="color:#66d9ef">return</span> FALSE;
+}</code></pre></div>
+
+<p>This code may look fine - the problem is - if we were incorrect, the exception probably won&rsquo;t be caught in our SEH handler. In the windows
+kernel, Windows expects you not to access invalid addresses in the kernel range of addresses - That&rsquo;s why in certain situations the
+windows kernel will immediately initiate a blue screen without executing SEH when an exception occurs. The usage of __try is mainly for
+validating and accessing user mode addresses (Also make sure you lock the pages and use ProbeForRead/Write).</p>
+
+<p>So how can we know we got the correct address? Let&rsquo;s say we want to validate the address of DpcData - how should we do it?</p>
+
+<p>A bad way to do it (which sometimes is necessary) is to use MmIsAddressValid. This function returns TRUE if the PTE for the virtual
+address is a valid PTE, else FALSE. This function is bad because:</p>
+
+<ol>
+<li>It&rsquo;s prone to race conditions - the address may not be valid after the call to MmIsAddressValid</li>
+<li>This function has a big drawback: If the memory is paged out, it will return FALSE - we would want it to return TRUE because
+eventually if we access a paged out address (Not &gt;= DISPATCH_LEVEL and not inside a file system paging IO handler) it should just page in the memory and give us the memory as expected - so in case the address can be paged out we cannot use MmIsAddressValid.</li>
+</ol>
+
+<p>I found that MmIsAddressValid can be useful in case you want to scan and look for an address.. Still, avoid using it if not necessary.</p>
+
+<p>So we may want a different solution. If you hang out in unknown cheats enough you&rsquo;ll find the following post:
+<a href="https://www.unknowncheats.me/forum/anti-cheat-bypass/314342-read-unknown-kernel-address-safe.html">&ldquo;Read Unknown Kernel Address In A Safe Way&rdquo;</a></p>
+
+<p>In short, you can use <a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmcopymemory">MmCopyMemory</a> - If you
+look at the MSDN documentation you&rsquo;ll see the following sentence:</p>
+
+<p>&ldquo;<em>Kernel-mode drivers can call this routine to safely access arbitrary physical or virtual addresses.</em>&ldquo;</p>
+
+<p>The function allows the caller to read arbitrary amount of memory safely:)</p>
+
+<p>This function was added in 8.1. Before that, you can use <a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospace">MmMapIoSpace</a> to create another virtual address range for a physical address, and use this new range to read the pages. (The
+drawback of this approach is that if the range is more than one page it&rsquo;ll be harder but possible..)</p>
+
+<p>In our case, these functions cannot be used because of synchronization problems we&rsquo;ll discuss soon. (We need to access these data
+structures at HIGH_LEVEL IRQL to prevent preemption and race conditions..) so we need to think of other ways to validate our result.</p>
+
+<p>Sometimes in these signatures you have to be creative - that&rsquo;s why I think it&rsquo;s fun. (Remember, fun stuff is not always allowed to
+get into real products because of stability issues&hellip;) - Actually we can validate the address of DpcData without performing any
+dereference ourselves!</p>
+
+<p>The address of the DpcData we get must be within the range of the KPRCB, that means can safely access these members:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KDPC_DATA {    
+    _KDPC_LIST DpcList
+	KSPIN_LOCK DpcLock;
+	LONG DpcQueueDepth;
+	ULONG DpcCount;
+	PKDPC ActiveDpc;
+} KDPC_DATA, <span style="color:#f92672">*</span>PKDPC_DATA;
+
+<span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _KDPC_LIST {
+	SINGLE_LIST_ENTRY ListHead;
+	PSINGLE_LIST_ENTRY LastEntry;
+} KDPC_LIST, <span style="color:#f92672">*</span> PKDPC_LIST;
+
+
+<span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> _SINGLE_LIST_ENTRY {
+    <span style="color:#66d9ef">struct</span> _SINGLE_LIST_ENTRY <span style="color:#f92672">*</span>Next;
+} SINGLE_LIST_ENTRY, <span style="color:#f92672">*</span>PSINGLE_LIST_ENTRY;</code></pre></div>
+
+<p>Ok, some validations we can still perform:</p>
+
+<ol>
+<li>Queue a DPC (With KeInsertQueueDpc) then inside the DpcRoutine validate that ActiveDpc points to our DPC object.</li>
+<li>Queue a HighImportance DPC and compare DpcData-&gt;ListHead.Next to the DpcListEntry of our DPC object.</li>
+<li>Queue a LowImportance DPC and compare DpcData-&gt;LastEntry to the DpcListEntry of our DPC object.</li>
+<li>After queueing a new DPC, validate that the DpcCount and DpcQueueDepth are increased by one.</li>
+<li>After removing a DPC, validate that the DpcQueueDepth is decreased and DpcCount stays the same.</li>
+</ol>
+
+<p>These validations are simply comparisons of values inside KDPC_DATA and do not require any dereference. That way we can validate that
+we got the correct DpcData address and the offsets of the members were not changed. The only member that probably cannot be validated
+is the DpcLock - When we discuss synchronization we&rsquo;ll talk about how we can solve locking issues.</p>
+
+<p>Again, these methods are not 100% reliable, but they are good enough for the solution to the exercise. Sometimes in the windows kernel
+you just have to use undocumented functions / data structures, try to do it safely.</p>
+
+<h2 id="synchronization-issues">Synchronization Issues</h2>
+
+<p>Ok, now we have the address of DpcData and we want to iterate over the DPCs in the queue and then print information about the queue.
+As we said earlier, the DpcData structure is embedded inside the KPRCB - that means this data structure is a per-processor data
+structure. Let&rsquo;s understand what synchronization issues we need to deal with before accessing this data structure.</p>
+
+<h3 id="synchronization-at-passive-level">Synchronization at PASSIVE_LEVEL</h3>
+
+<p>Normally, when we want to access a data structure that is shared between a couple of threads (That run in Irql PASSIVE_LEVEL) we need
+to use some synchronization primitive - typically some kind of &ldquo;lock&rdquo; that will prevent 2 threads from modifying the data structure
+at the same time. For example, in the windows kernel we can use the ERESOURCE reader-writer lock to synchronize access to a data
+structure. In user mode we have critical sections.</p>
+
+<p>But what if we want to access this data structure in IRQL DISPATCH_LEVEL?</p>
+
+<h3 id="what-s-irql">What&rsquo;s IRQL?</h3>
+
+<p>If you don&rsquo;t know what&rsquo;s IRQL - in a sentence it&rsquo;s the definition in windows of the priority level of the CPU. Code in user mode runs at 0 priority level (PASSIVE_LEVEL) and each registered interrupt has a level assigned with it. When an interrupt arrives to the CPU, The
+CPU checks whether the current CPU level is higher than the level of the interrupt - if the level is higher or equal, the interrupt
+will be pending until the level lowers down to a lower level. After that, the interrupt will execute. This mechanism is used to:</p>
+
+<ul>
+<li>Allow interrupts from hardware devices to execute right away (interrupt handlers need to execute very fast)</li>
+<li>Allow software interrupts to execute - For example APCs and DPCs are implemented using software interrupts - Special kernel APC runs at
+APC_LEVEL and if it&rsquo;s queued an actual software interrupt is sent to the CPU.</li>
+<li>Assist the implementation of context switching</li>
+<li>&hellip;</li>
+</ul>
+
+<p>Summary of IRQLs below: (The values are from x86)</p>
+
+<ul>
+<li>0 - PASSIVE_LEVEL - Most code you&rsquo;ll write.</li>
+<li>1 - APC_LEVEL - Special kernel APCs</li>
+<li>2 - DISPATCH_LEVEL - The scheduler cannot be activated - You cannot sleep, cannot call WaitForObject or perform any file I/O.</li>
+<li>above 2 - DIRQL (Device IRQL) - Typically IRQLs assigned to interrupt handlers.
+<br /></li>
+</ul>
+
+<p>IRQL is a pretty essential topic for kernel developers and researchers. I think it&rsquo;s also cool;)</p>
+
+<h3 id="synchronization-at-dispatch-level">Synchronization at DISPATCH_LEVEL</h3>
+
+<p>Sometimes you&rsquo;ll run code at DISPATCH_LEVEL - This will typically occur if you:</p>
+
+<ul>
+<li>Write network filters - Some of the callbacks of network filters are invoked at DISPATCH_LEVEL (WFP callouts for example)</li>
+<li>Use KTIMER Timers - This timer works by queuing a DPC for you - DPCs are invoked at DISPATCH_LEVEL.</li>
+<li>Write an interrupt handler - Typically DPCs are queued in interrupt handlers to continue the work of the DPC.</li>
+<li>Raise IRQL to DISPATCH_LEVEL - This happens in certain cases we&rsquo;ll see soon.</li>
+</ul>
+
+<p>To synchronize at DISPATCH_LEVEL you&rsquo;ll have to use a synchronizaion object called Spin Locks.</p>
+
+<p>A spin lock is simply a flag that can be either acquired or released. When you want to acquire the spin lock, you just wait in a loop
+until the spin lock is released and then change the flag to be acquired. When you want to release the spin lock, you simply set it to
+&ldquo;released&rdquo;. This is also called &ldquo;busy waiting&rdquo; and this synchronization object is used mostly in high IRQLs. WaitForObject cannot be used
+at &gt;= DISPATCH_LEVEL becuase the scheduler cannot be invoked.</p>
+
+<p>Ok so let&rsquo;s say we want to share a queue between DISPATCH_LEVEL code and an interrupt handler (let&rsquo;s say IRQL 3). To do this, we&rsquo;ll try
+to use Spin Locks. There&rsquo;s a problem with using a spin lock to do so. Try to find the bug here:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">//
+</span><span style="color:#75715e">// Runs at IRQL 3 (DIRQL)
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>VOID <span style="color:#a6e22e">InterruptHandler</span>() 
+{
+	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// When an interrupt arrives get the DEVICE_JOB
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// and queue it
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	DEVICE_JOB<span style="color:#f92672">*</span> Info <span style="color:#f92672">=</span> GetDeviceJob();
+
+	AcquireSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+
+	QueueDeviceJob(<span style="color:#f92672">&amp;</span>DeviceJobQueue, Info);
+
+	ReleaseSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+}
+
+<span style="color:#75715e">//
+</span><span style="color:#75715e">// Runs at DISPATCH_LEVEL
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e"></span>VOID <span style="color:#a6e22e">RunQueuedItems</span>() 
+{
+	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// Process all the jobs in the queue every 10 seconds
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#66d9ef">while</span> (TRUE) {
+		Sleep(SECONDS(<span style="color:#ae81ff">10</span>));
+
+		<span style="color:#75715e">// DONT DO IT: There&#39;s a bug here.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// Use spin lock to synchronize access to the queue.
+</span><span style="color:#75715e"></span>		<span style="color:#75715e">// Make sure that jobs cannot be added to the queue while processing
+</span><span style="color:#75715e"></span>
+		AcquireSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+		
+		<span style="color:#66d9ef">for</span> (ULONG i <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; i <span style="color:#f92672">&lt;</span> DeviceJobQueue<span style="color:#f92672">-&gt;</span>JobCount; i<span style="color:#f92672">++</span>) {
+			ProcessJob(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Queue[i]);
+		}
+
+        DeviceJobQueue<span style="color:#f92672">-&gt;</span>JobCount <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+
+		ReleaseSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+	}
+
+}</code></pre></div>
+
+<p>Image the following situation:</p>
+
+<ol>
+<li>The DeviceJobQueue has 10 items in it.</li>
+<li>Queue processing is started, the spin lock is acquired to process the queue.</li>
+<li>Device interrupt arrives! The code of the InterruptHandler function starts at IRQL 3.</li>
+<li>AcquireSpinLock is called while the spin lock is acquired.</li>
+<li>The InterruptHandler function waits for the spin lock to be released.</li>
+<li>The spin lock is never released because the RunQueuedItems function was interrupted.</li>
+<li>Deadlock:)</li>
+</ol>
+
+<p>How would you solve this deadlock?</p>
+
+<p>The simplest solution (used also in Windows) is to disable this preemption - prevent the code of the interrupt handler from interrupting
+code that touches the queue. To do this we&rsquo;ll raise our IRQL to the same IRQL of the interrupt handler (3):</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">VOID <span style="color:#a6e22e">RunQueuedItems</span>() 
+{
+	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">// Process all the jobs in the queue every 10 seconds
+</span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>	<span style="color:#66d9ef">while</span> (TRUE) {
+		Sleep(SECONDS(<span style="color:#ae81ff">10</span>));
+
+		<span style="color:#66d9ef">while</span> (TRUE) {
+			
+			KIRQL OldIrql;
+
+			<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>			<span style="color:#75715e">// Get a job from the queue
+</span><span style="color:#75715e"></span>			<span style="color:#75715e">// Make sure to raise the IRQL when accessing the queue
+</span><span style="color:#75715e"></span>			<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>			KeRaiseIrql(DeviceJobIrql, <span style="color:#f92672">&amp;</span>OldIrql);
+
+			AcquireSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+			DEVICE_JOB<span style="color:#f92672">*</span> DeviceJob <span style="color:#f92672">=</span> PopDeviceJobQueue(<span style="color:#f92672">&amp;</span>DeviceJobQueue);
+			ReleaseSpinLock(<span style="color:#f92672">&amp;</span>DeviceJobQueue<span style="color:#f92672">-&gt;</span>Lock);
+
+			KeLowerIrql(OldIrql);
+
+			<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>JobQueue)
+				<span style="color:#66d9ef">break</span>;
+
+			<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>			<span style="color:#75715e">// Process the job
+</span><span style="color:#75715e"></span>			<span style="color:#75715e">//
+</span><span style="color:#75715e"></span>			ProcessJob(Job);
+		
+		}
+	}
+
+}</code></pre></div>
+
+<p>A similar approach is used in the DPC mechanism.</p>
+
+<h3 id="synchronizing-with-dpc-functions">Synchronizing with DPC functions</h3>
+
+<p>DPCs can be queued from any IRQL (even the highest IRQL) that means that to synchronize with such code we have to raise our IRQL to
+HIGH_LEVEL so we won&rsquo;t get interrupted. If you look at the implementation of KeInsertQueueDpc, you&rsquo;ll see the following instructions:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rcx, cr8       ; CR8 is the register that holds the current IRQL
+mov     [rsp+TempIRQL], rcx
+mov     eax, HIGH_LEVEL
+mov     cr8, rax        ; Raise to HIGH_LEVEL</code></pre></div>
+
+<p>After raising the IRQL to HIGH_LEVEL the function inserts the DPC to the queue.</p>
+
+<p>At the end of the function, you&rsquo;ll see this code:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-Assembly" data-lang="Assembly">mov     rbx, [rsp+TempIRQL]
+...
+...
+mov     cr8, rbx</code></pre></div>
+
+<p>To synchronize with such code we&rsquo;ll have to raise the IRQL to HIGH_LEVEL as well to prevent interrupts.
+Wait, is something missing? If you look at the implementation of KeInsertQueueDpc you&rsquo;ll see it acquires the DpcData-&gt;DpcLock before
+touching the queue. You may ask yourselves now: Why is this lock needed if the IRQL is raised?</p>
+
+<p>The thing is: The spin lock is needed to allow access from multiple CPUs to the same DPC queue - this is needed typically when using
+the following function:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">KeSetTargetProcessorDpc</span>(
+  PRKDPC Dpc,
+  CCHAR  Number
+);</code></pre></div>
+
+<p>This function allows the user to queue a DPC to a different CPU, that&rsquo;s why you need to access the DPC queue of another CPU. As a matter
+of fact, If the DPC could not be queued to a different CPU, raising IRQL would be enough. The method of disabling interrupts is still
+useful on some weird machines with 1 core.</p>
+
+<h3 id="recursive-spin-lock-issue">Recursive spin lock issue</h3>
+
+<p>If you remember from our signature implementation, we would like to do the following: (can you spot the issue?)</p>
+
+<ol>
+<li>Acquire the DPC queue spin lock</li>
+<li>save the depth of the queue</li>
+<li>call KeInsertQueueDpc</li>
+<li>check that the depth was increased by one</li>
+<li>Do a bunch of other validations&hellip;</li>
+<li>release the spin lock</li>
+</ol>
+
+<p>The issue here is that calling KeInsertQueueDpc would cause a deadlock! The reason is that spin locks cannot be acquired recursively and
+KeInsertQueueDpc tries to acquire the spin lock after we already acquired it in step 1.</p>
+
+<p>Oh man&hellip; What can we do to solve this issue? The reason we wanted to acquire the spin lock from the beginning is to make sure other CPUs will not
+access our queue. Another issue with acquiring this lock is that the offset of the DpcLock is undocumented, we may think we know the lock
+is there but maybe it&rsquo;s not there..?</p>
+
+<p>Maybe we should think about a different way to make sure the queue will not be accessed by other CPUs.. Can you think of such way?</p>
+
+<p>Imagine the following: We can send a DPC to all processors and then try to synchronize using a spinlock to make sure our code is the only
+code that runs globally on all CPUs! Man, this sounds complicated (not really) but Windows has already a built in mechanism called IPI
+(Inter-Processor Interrupt) we can utilize for such case:</p>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C">ULONG_PTR <span style="color:#a6e22e">KeIpiGenericCall</span>(
+  PKIPI_BROADCAST_WORKER BroadcastFunction,
+  ULONG_PTR              Context
+);</code></pre></div>
+
+<p>MSDN Documentation:</p>
+
+<p><em>The KeIpiGenericCall routine causes the specified routine to run on all processors simultaneously. When a driver calls KeIpiGenericCall, the system interrupts every processor and raises the IRQL to IPI_LEVEL (interprocessor interrupt level). Each processor spins on a barrier until all processors have reached the barrier; then, all processors begin calling IpiGenericCall. KeIpiGenericCall waits for all calls to IpiGenericCall to complete before returning.</em></p>
+
+<p>We can broadcast our function to all processors! This way we make sure our code is the only code that executes on all processors.
+Using IPI has these advantages:</p>
+
+<ol>
+<li>We don&rsquo;t need to be afraid of using an undocumented spin lock</li>
+<li>We can call the DPC functions without getting a deadlock.</li>
+</ol>
+
+<h2 id="implementation">Implementation</h2>
+
+<p><a href="https://github.com/repnz/practical-reverse-engineering/tree/master/DpcQueueDumper">Source Code</a></p>
+
+<p>The general implementation does the following:</p>
+
+<ol>
+<li><p>Validate that the layout of the DPC object is as expected by creating a DPC and
+  checking the values of its members.</p></li>
+
+<li><p>Fetch the DpcData member by assuming that this is the layout of the structure:</p></li>
+</ol>
+
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">struct</span> _KPRCB {
+	...
+	...
+	...
+	<span style="color:#66d9ef">struct</span> _KDPC_DATA DpcData[<span style="color:#ae81ff">2</span>];
+	VOID<span style="color:#f92672">*</span> DpcStack;                                                         
+	...
+	...
+}</code></pre></div>
+
+<p>The DpcStack member is right after the DpcData member. If the offset of DpcStack can be found,
+it can be used to find the DpcData member. Of course, this assumption is validated.</p>
+
+<p>The offset of the DpcStack member is found by queueing a DPC. When the DPC routine runs the value of RSP is taken
+from this member. This is true only in the context of a DPC interrupt. If the idle thread runs the DPC routine, the value of RSP
+is not changed - So we have to make sure the DPC is run in the context of a DPC interrupt. We do this by queuing the DPC from PASSIVE_LEVEL
+with HighImportance. So we take the value of RSP, search in the KPRCB, and find the DpcData.</p>
+
+<p>3) After the KDPC_DATA was found, trigger an inter-processor interrupt that will validate the contents of the KDPC_DATA structure.
+   An IPI is used to prevent other CPUs from changing the queue.</p>
+
+<p>(I think the better implementation is using the ListHead / LastEntry scan to find the structure but honestly this is the solution I
+wrote first.)</p>
+
+<h2 id="summary">Summary</h2>
+
+<p>This exercise was pretty fun, see you next time!
+<a href="https://twitter.com/0xrepnz">@0xrepnz</a></p>
+
+</div>
+
+
+    </main>
+
+    
+  </body>
+</html>
