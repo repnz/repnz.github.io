@@ -69,10 +69,10 @@
 <h2 id="intro">Intro</h2>
 
 <p>Reverse engineering compiler optimizations can delay a reverse engineer a-lot. By learning how the compiler optimizes certain
-things, you can save lots of time. Knowning the pattern, next time you see this optimization you&rsquo;ll recognize right away how to
+things, you can save lots of time. Knowing the pattern, the next time you see this optimization you&rsquo;ll recognize right away how to
 decompile it.</p>
 
-<p>In this blog post series I&rsquo;ll document how to decompile certain compiler optimizations, I hope it&rsquo;ll save some time for you.</p>
+<p>In this blog post series, I&rsquo;ll document how to decompile certain compiler optimizations, I hope it&rsquo;ll save some time for you.</p>
 
 <h2 id="division-by-multiplication">Division By Multiplication</h2>
 
@@ -84,13 +84,13 @@ decompile it.</p>
 mov     rax, <span style="color:#ae81ff">0x3333333333333400</span>          
 mul     rcx                              </code></pre></div>
 
-<p>Every time I see weird assembly code, I think to myself: Did the author write this code?
+<p>Every time I see weird assembly code, I think to myself: did the author write this code?
 After understanding what this code does, I knew this is a compiler optimization - This code simply performs a division operation
 without using the &lsquo;div&rsquo; instruction.
-&lsquo;div&rsquo; is an expensive operation for the CPU - even more than multiplication. Let&rsquo;s look how we can understand this optimization:</p>
+&lsquo;div&rsquo; is an expensive operation for the CPU - even more than multiplication. Let&rsquo;s look at how we can understand this optimization:</p>
 
 <p>Let&rsquo;s say we want to divide X by 5. In math, (X / 5) = (X * (<sup>1</sup>&frasl;<sub>5</sub>)). This is the basis of this optimization.
-So, we can invert 5 to the value <sup>1</sup>&frasl;<sub>5</sub> and than use multiplication.</p>
+So, we can invert 5 to the value <sup>1</sup>&frasl;<sub>5</sub> and then use multiplication.</p>
 
 <p>But you may ask: How can we perform (X * (<sup>1</sup>&frasl;<sub>5</sub>)) without using floating point instructions?</p>
 
